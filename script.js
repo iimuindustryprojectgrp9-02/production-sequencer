@@ -5,10 +5,10 @@ const LINES = ['L1', 'L2'];
 
 // State
 let state = {
-    dailyCapacity: 480,
+    dailyCapacity: 1000,
     maxBatchSize: 1000,
     maxBatches: 3,
-    transitionTime: [], // 5x5
+    transitionPenalty: [], // 5x5
     transitionCost: [], // 5x5
     demandL1: [], // 7 Days x 5 Products (Transposed)
     demandL2: [], // 7 Days x 5 Products (Transposed)
@@ -97,7 +97,7 @@ function switchView(viewId) {
 // --- Grid Initialization ---
 
 function initTransitionGrids() {
-    // Time Grid
+    // Penalty Grid
     createGrid('transTimeContainer', PRODUCTS.length + 1, PRODUCTS.length + 1, (r, c, cell) => {
         if (r === 0 && c === 0) cell.textContent = 'From\\To';
         else if (r === 0) { cell.textContent = PRODUCTS[c - 1]; cell.classList.add('grid-header'); }
@@ -105,17 +105,17 @@ function initTransitionGrids() {
         else if (r === c) { cell.textContent = '-'; cell.style.background = '#eee'; }
         else {
             // Init state
-            if (!state.transitionTime[r - 1]) state.transitionTime[r - 1] = [];
-            if (state.transitionTime[r - 1][c - 1] === undefined) {
-                state.transitionTime[r - 1][c - 1] = 30;
+            if (!state.transitionPenalty[r - 1]) state.transitionPenalty[r - 1] = [];
+            if (state.transitionPenalty[r - 1][c - 1] === undefined) {
+                state.transitionPenalty[r - 1][c - 1] = 30;
             }
-            const val = state.transitionTime[r - 1][c - 1];
+            const val = state.transitionPenalty[r - 1][c - 1];
 
-            const input = createInput(val, (v) => updateTransition('time', r - 1, c - 1, v));
+            const input = createInput(val, (v) => updateTransition('penalty', r - 1, c - 1, v));
             // Add data attributes for paste support
             input.dataset.row = r - 1;
             input.dataset.col = c - 1;
-            input.dataset.grid = 'transitionTime';
+            input.dataset.grid = 'transitionPenalty';
             cell.appendChild(input);
         }
     });
@@ -145,7 +145,7 @@ function initTransitionGrids() {
 }
 
 function updateTransition(type, r, c, val) {
-    if (type === 'time') state.transitionTime[r][c] = val;
+    if (type === 'penalty') state.transitionPenalty[r][c] = val;
     if (type === 'cost') state.transitionCost[r][c] = val;
     saveState();
 }
@@ -255,7 +255,7 @@ function handlePaste(e) {
                     setTimeout(() => input.style.backgroundColor = '', 500);
 
                     // Update state
-                    if (gridKey === 'transitionTime') state.transitionTime[targetRow][targetCol] = numVal;
+                    if (gridKey === 'transitionPenalty') state.transitionPenalty[targetRow][targetCol] = numVal;
                     else if (gridKey === 'transitionCost') state.transitionCost[targetRow][targetCol] = numVal;
                     else state[gridKey][targetRow][targetCol] = numVal;
 
@@ -290,10 +290,10 @@ function runOptimization() {
 }
 
 function solveLine(demandMatrix, type) {
-    let weightTime = 0, weightCost = 0, weightLostSales = 0;
-    if (type === 'time') weightTime = 1;
+    let weightPenalty = 0, weightCost = 0, weightLostSales = 0;
+    if (type === 'time') weightPenalty = 1;
     else if (type === 'cost') weightCost = 1;
-    else if (type === 'combined') { weightTime = 1; weightCost = 1; }
+    else if (type === 'combined') { weightPenalty = 1; weightCost = 1; }
     else if (type === 'lostSales') { weightLostSales = 1000; }
 
     let inventory = Array(5).fill(0);
@@ -301,11 +301,11 @@ function solveLine(demandMatrix, type) {
     let lastProduct = -1;
 
     let schedule = [];
-    let totalTime = 0, totalCost = 0, totalLostSales = 0;
+    let totalPenalty = 0, totalCost = 0, totalLostSales = 0;
 
     for (let day = 0; day < 7; day++) {
         let daySchedule = [];
-        let remainingTime = state.dailyCapacity;
+        let remainingCapacity = state.dailyCapacity;
         let batchesToday = 0;
 
         // Candidates logic
@@ -342,16 +342,16 @@ function solveLine(demandMatrix, type) {
             // Priority 2 (Only for Lost Sales optimization): Density Heuristic (Benefit / Cost)
             if (type === 'lostSales') {
                 // Calculate potential production for A
-                let maxPossibleA = remainingTime - transA.time;
+                let maxPossibleA = remainingCapacity - transA.penalty;
                 let producedA = Math.max(0, Math.min(a.mandatory, maxPossibleA, state.maxBatchSize));
-                let timeSpentA = transA.time + producedA;
-                let scoreA = timeSpentA > 0 ? (producedA / timeSpentA) : 0;
+                let capacityUsedA = transA.penalty + producedA;
+                let scoreA = capacityUsedA > 0 ? (producedA / capacityUsedA) : 0;
 
                 // Calculate potential production for B
-                let maxPossibleB = remainingTime - transB.time;
+                let maxPossibleB = remainingCapacity - transB.penalty;
                 let producedB = Math.max(0, Math.min(b.mandatory, maxPossibleB, state.maxBatchSize));
-                let timeSpentB = transB.time + producedB;
-                let scoreB = timeSpentB > 0 ? (producedB / timeSpentB) : 0;
+                let capacityUsedB = transB.penalty + producedB;
+                let scoreB = capacityUsedB > 0 ? (producedB / capacityUsedB) : 0;
 
                 if (Math.abs(scoreA - scoreB) > 0.0001) {
                     return scoreB - scoreA; // Descending Score
@@ -361,9 +361,9 @@ function solveLine(demandMatrix, type) {
                 if (producedA !== producedB) return producedB - producedA;
             }
 
-            // Priority 3: Minimize Transition Cost/Time (Standard Efficiency)
-            let costA = transA.time * weightTime + transA.cost * weightCost;
-            let costB = transB.time * weightTime + transB.cost * weightCost;
+            // Priority 3: Minimize Transition Cost/Penalty (Standard Efficiency)
+            let costA = transA.penalty * weightPenalty + transA.cost * weightCost;
+            let costB = transB.penalty * weightPenalty + transB.cost * weightCost;
 
             return costA - costB;
         });
@@ -376,22 +376,22 @@ function solveLine(demandMatrix, type) {
             let amountNeeded = cand.mandatory + cand.desirable;
             let trans = getTransition(lastProduct, p);
 
-            if (remainingTime < trans.time) break;
+            if (remainingCapacity < trans.penalty) break;
 
             // Transition
             if (lastProduct !== p && lastProduct !== -1) {
-                remainingTime -= trans.time;
-                totalTime += trans.time;
+                remainingCapacity -= trans.penalty;
+                totalPenalty += trans.penalty;
                 totalCost += trans.cost;
             }
             lastProduct = p;
 
             // Production
-            let maxPossible = remainingTime;
+            let maxPossible = remainingCapacity;
             let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
 
             if (amountToProduce > 0) {
-                remainingTime -= amountToProduce;
+                remainingCapacity -= amountToProduce;
                 batchesToday++;
 
                 daySchedule.push({ p: p, amount: amountToProduce });
@@ -438,13 +438,13 @@ function solveLine(demandMatrix, type) {
         });
     }
 
-    return { schedule, totalTime, totalCost, totalLostSales };
+    return { schedule, totalPenalty, totalCost, totalLostSales };
 }
 
 function getTransition(fromP, toP) {
-    if (fromP === -1 || fromP === toP) return { time: 0, cost: 0 };
+    if (fromP === -1 || fromP === toP) return { penalty: 0, cost: 0 };
     return {
-        time: state.transitionTime[fromP][toP] || 0,
+        penalty: state.transitionPenalty[fromP][toP] || 0,
         cost: state.transitionCost[fromP][toP] || 0
     };
 }
@@ -463,7 +463,7 @@ function renderCurrentResults() {
         <div class="card full-width">
             <h3>Performance Summary (${type})</h3>
             <div class="form-row">
-                <div class="stat-box"><div class="stat-value">${res.L1.totalTime + res.L2.totalTime} units</div><div class="stat-label">Total Transit Penalty</div></div>
+                <div class="stat-box"><div class="stat-value">${res.L1.totalPenalty + res.L2.totalPenalty} units</div><div class="stat-label">Total Transit Penalty</div></div>
                 <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
                 <div class="stat-box"><div class="stat-value">${res.L1.totalLostSales + res.L2.totalLostSales} units</div><div class="stat-label">Lost Sales</div></div>
             </div>
@@ -518,10 +518,10 @@ function renderDashboard() {
     let chartHtml = '';
 
     // Find max values for normalization
-    let maxTime = 0, maxCost = 0, maxLost = 0;
+    let maxPenalty = 0, maxCost = 0, maxLost = 0;
     types.forEach(t => {
         const res = state.lastResults[t][line];
-        if (res.totalTime > maxTime) maxTime = res.totalTime;
+        if (res.totalPenalty > maxPenalty) maxPenalty = res.totalPenalty;
         if (res.totalCost > maxCost) maxCost = res.totalCost;
         if (res.totalLostSales > maxLost) maxLost = res.totalLostSales;
     });
@@ -530,14 +530,14 @@ function renderDashboard() {
         const res = state.lastResults[t][line];
 
         // Calculate heights (percentage)
-        const hTime = maxTime ? (res.totalTime / maxTime) * 100 : 0;
+        const hPenalty = maxPenalty ? (res.totalPenalty / maxPenalty) * 100 : 0;
         const hCost = maxCost ? (res.totalCost / maxCost) * 100 : 0;
         const hLost = maxLost ? (res.totalLostSales / maxLost) * 100 : 0;
 
         chartHtml += `
             <div class="chart-group">
                 <div class="chart-bars">
-                    <div class="bar time" style="height: ${Math.max(hTime, 5)}%" data-value="Penalty: ${res.totalTime} units"></div>
+                    <div class="bar time" style="height: ${Math.max(hPenalty, 5)}%" data-value="Penalty: ${res.totalPenalty} units"></div>
                     <div class="bar cost" style="height: ${Math.max(hCost, 5)}%" data-value="Cost: $${res.totalCost}"></div>
                     <div class="bar lost" style="height: ${Math.max(hLost, 5)}%" data-value="Lost: ${res.totalLostSales}"></div>
                 </div>
