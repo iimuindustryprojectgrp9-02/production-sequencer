@@ -60,6 +60,16 @@
                                 <label>Cost Weight (%)</label>
                                 <input type="number" id="costWeight" value="50" min="0" max="100">
                             </div>
+                            <div class="form-group">
+                                <label>Optimization Engine</label>
+                                <select id="optimizationEngine">
+                                    <option value="auto">Auto-Select (Best Performer)</option>
+                                    <option value="greedy">Standard Greedy</option>
+                                    <option value="leveling">Production Leveling</option>
+                                    <option value="lookahead">Multi-day Look-ahead</option>
+                                    <option value="search">Global Search (Simulated Annealing)</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 

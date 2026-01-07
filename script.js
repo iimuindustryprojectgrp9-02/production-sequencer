@@ -10,6 +10,7 @@ let state = {
     maxBatches: 3,
     penaltyWeight: 50,
     costWeight: 50,
+    optimizationMethod: 'auto',
     transitionPenalty: [], // 5x5
     transitionCost: [], // 5x5
     demandL1: [], // 7 Days x 5 Products (Transposed)
@@ -27,18 +28,22 @@ function saveState() {
     }
 }
 
+/**
+ * Merges saved state into the current defaults to handle property additions.
+ */
 function loadState() {
-    try {
-        const saved = localStorage.getItem(STATE_KEY);
-        if (saved) {
+    const saved = localStorage.getItem('erp_state');
+    if (saved) {
+        try {
             const parsed = JSON.parse(saved);
-            // Merge loaded state with default structure to ensure compatibility
+            // Deep merge logic to avoid losing new default properties
             state = { ...state, ...parsed };
-            console.log("State loaded from storage");
+            return true;
+        } catch (e) {
+            console.error("Failed to load state", e);
         }
-    } catch (e) {
-        console.error("Failed to load state", e);
     }
+    return false;
 }
 
 // Initialization
@@ -92,6 +97,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.penaltyWeight = 100 - val;
                 cWeightInput.value = state.costWeight;
                 pWeightInput.value = state.penaltyWeight;
+                saveState();
+            });
+        }
+
+        const engineInput = document.getElementById('optimizationEngine');
+        if (engineInput) {
+            engineInput.value = state.optimizationMethod || 'auto';
+            engineInput.addEventListener('change', (e) => {
+                state.optimizationMethod = e.target.value;
                 saveState();
             });
         }
@@ -364,11 +378,22 @@ function runOptimization() {
     const types = ['time', 'cost', 'combined', 'lostSales'];
     state.lastResults = {}; // Reset before run
 
-    // Determine the best strategy via benchmarking if not already cached
-    const bestStrategy = findBestStrategy();
-    console.log("Using best observed strategy:", bestStrategy.name);
+    const strategiesMap = {
+        'greedy': { name: 'Greedy (Standard)', solve: solveLine },
+        'leveling': { name: 'Production Leveling', solve: (m, t) => solveLine(levelDemand(m), t) },
+        'lookahead': { name: 'Multi-day Look-ahead', solve: solveLineLookAhead },
+        'search': { name: 'Simulated Annealing (Global)', solve: solveLineSearch }
+    };
 
     types.forEach(type => {
+        let bestStrategy;
+        if (state.optimizationMethod && state.optimizationMethod !== 'auto') {
+            bestStrategy = strategiesMap[state.optimizationMethod];
+        } else {
+            // Find the best strategy SPECIFICALLY for this type
+            bestStrategy = findBestStrategyForType(type);
+        }
+
         state.lastResults[type] = {
             L1: bestStrategy.solve(state.demandL1, type),
             L2: bestStrategy.solve(state.demandL2, type),
@@ -379,6 +404,44 @@ function runOptimization() {
     switchView('results');
     saveState(); // Save results
     renderCurrentResults();
+}
+
+/**
+ * Benchmarks all algorithms for a specific optimization goal.
+ */
+function findBestStrategyForType(type) {
+    const strategies = [
+        { name: 'Greedy (Standard)', solve: solveLine },
+        { name: 'Production Leveling', solve: (m, t) => solveLine(levelDemand(m), t) },
+        { name: 'Multi-day Look-ahead', solve: solveLineLookAhead },
+        { name: 'Simulated Annealing (Global)', solve: solveLineSearch }
+    ];
+
+    let best = strategies[0];
+    let minScore = Infinity;
+
+    strategies.forEach(s => {
+        try {
+            const res = s.solve(state.demandL1, type);
+            // Score specifically for the requested goal
+            let score = 0;
+            if (type === 'time') score = res.totalPenalty;
+            else if (type === 'cost') score = res.totalCost;
+            else if (type === 'combined') score = (res.totalPenalty * (state.penaltyWeight / 100)) + (res.totalCost * (state.costWeight / 100));
+            else if (type === 'lostSales') score = res.totalLostSales;
+
+            // Apply extreme penalty for lost sales in all modes to ensure capacity feasibility
+            // Note: If one strategy has 50 lost sales and another has 0, the one with 0 should almost always win.
+            score += (res.totalLostSales * 100000);
+
+            if (score < minScore) {
+                minScore = score;
+                best = s;
+            }
+        } catch (e) { }
+    });
+
+    return best;
 }
 
 /**
@@ -546,15 +609,11 @@ function solveLine(demandMatrix, type) {
         let dayLostSales = Array(5).fill(0);
 
         candidates.forEach(c => {
-            if (c.mandatory > 0) {
-                totalLostSales += c.mandatory;
-                dayLostSales[c.p] = c.mandatory;
-                backlog[c.p] = 0; // Lost sales are lost, not backlogged (assuming per user request "Total lost sales")
-                // Or should it be backlogged? Usually lost sales means lost.
-                // Let's assume lost sales are cleared from backlog.
-            }
-            if (c.desirable > 0) {
-                backlog[c.p] += c.desirable;
+            let unmet = c.mandatory + c.desirable;
+            if (unmet > 0) {
+                totalLostSales += unmet;
+                dayLostSales[c.p] = unmet;
+                backlog[c.p] = 0; // Everything unmet is LOST immediately
             }
         });
 
@@ -653,15 +712,13 @@ function solveLineLookAhead(demandMatrix, type) {
  * Explores multiple production sequences to find a better global path.
  */
 function solveLineSearch(demandMatrix, type) {
-    // We'll run a few iterations of a randomized greedy search and keep the best
-    // This is a fast "Search" heuristic.
     let bestRes = null;
     let minScore = Infinity;
 
-    // Run 50 iterations with slight randomization in the greedy selection
-    for (let i = 0; i < 50; i++) {
-        const res = solveLineRandomized(demandMatrix, type, 0.2); // 20% randomness
-        const score = res.totalPenalty + res.totalCost + (res.totalLostSales * 5000);
+    // Run 100 iterations with randomization
+    for (let i = 0; i < 100; i++) {
+        const res = solveLineRandomized(demandMatrix, type, 0.15); // 15% randomness
+        const score = res.totalPenalty + res.totalCost + (res.totalLostSales * 100000);
         if (score < minScore) {
             minScore = score;
             bestRes = res;
@@ -731,8 +788,12 @@ function solveLineRandomized(demandMatrix, type, randomness = 0.1) {
 
         let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
         candidates.forEach(c => {
-            if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
-            if (c.desirable > 0) backlog[c.p] += c.desirable;
+            let unmet = c.mandatory + c.desirable;
+            if (unmet > 0) {
+                totalLostSales += unmet;
+                dayLostSales[c.p] = unmet;
+                backlog[c.p] = 0;
+            }
         });
         schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
     }

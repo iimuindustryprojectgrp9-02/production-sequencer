@@ -49,11 +49,8 @@ $$\text{Score} = \frac{\text{Produced}}{\text{Produced} + T_{last, next}}$$
 
 ---
 
-## 3. Inventory & Backlog Management
-- **Inventory**: Any production exceeding today's demand is stored and used to satisfy future demand.
-- **Backlog**: If today's demand + previous backlog isn't met:
-    - In **Lost Sales** mode: Mandatory items (backlog) not produced today are counted as "Lost Sales" and removed (penalty incurred).
-    - In other modes: Unmet demand is carried forward as backlog for tomorrow.
+### Lost Sales Policy
+Any demand (Backlog or Today's Demand) that is not produced by the end of the day is counted as a **Lost Sale** and removed from the system. This ensures that capacity constraints are strictly highlighted and prevents unreasonable backlog accumulation.
 
 ---
 
@@ -70,7 +67,9 @@ A greedy heuristic that looks one day into the future. It calculates the transit
 Our "MILP-lite" alternative. It performs 50 randomized iterations of the scheduling sequence, using a "temperature" to explore less-obvious paths. It then selects the result with the lowest global objective function (Penalty + Cost + Lost Sales).
 
 ## 5. Automatic Benchmarking
-Whenever you click "Run Optimization", the system runs a mini-benchmark:
-1.  It executes all 4 strategies (Greedy, Leveling, Look-ahead, Search).
-2.  It calculates a **Composite Score**: $$\text{Score} = \text{Total Penalty} + \text{Total Cost} + (\text{Lost Sales} \times 5000)$$
-3.  The strategy with the lowest score is selected as the **Global Default** and applied to all views.
+Whenever you click "Run Optimization", the system follows this logic:
+1.  **Manual Override**: If you have selected a specific engine (e.g., "Multi-day Look-ahead") in the Global Parameters, that engine is used directly.
+2.  **Auto-Select**: If "Auto-Select" is chosen, the system runs a mini-benchmark:
+    - It executes all 4 strategies (Greedy, Leveling, Look-ahead, Search).
+    - It calculates a **Composite Score**: $$\text{Score} = \text{Total Penalty} + \text{Total Cost} + (\text{Lost Sales} \times 5000)$$
+    - The strategy with the lowest score is selected and applied.
