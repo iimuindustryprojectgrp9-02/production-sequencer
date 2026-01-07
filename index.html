@@ -38,7 +38,7 @@
                         <h3>Global Parameters</h3>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Daily Capacity (Units)</label>
+                                <label>Daily Capacity (Units Produced)</label>
                                 <input type="number" id="dailyCapacity" value="1000">
                             </div>
                             <div class="form-group">
@@ -78,7 +78,7 @@
                         <h3>Transition Settings (From Row -> To Col)</h3>
                         <div class="split-tables">
                             <div class="table-wrapper">
-                                <h4>Transition Penalty (Units)</h4>
+                                <h4>Transit Time (min)</h4>
                                 <div id="transTimeContainer" class="spreadsheet-grid"></div>
                             </div>
                             <div class="table-wrapper">
@@ -114,9 +114,9 @@
                     <div class="header-actions">
                         <label>Optimization Goal:</label>
                         <select id="optGoal" onchange="renderCurrentResults()">
-                            <option value="time">Minimum Transit Penalty</option>
+                            <option value="time">Minimum Transit Time</option>
                             <option value="cost">Minimum Transit Cost</option>
-                            <option value="combined">Combined Min Penalty & Cost</option>
+                            <option value="combined">Combined Min Transit Time & Cost</option>
                             <option value="lostSales">Minimum Lost Sales</option>
                         </select>
                     </div>

@@ -140,6 +140,31 @@ nav {
     background: #2472a4;
 }
 
+.secondary-btn {
+    background: #ecf0f1;
+    color: #2c3e50;
+    border: 1px solid #dcdde1;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+}
+
+.secondary-btn:hover {
+    background: #dfe6e9;
+    border-color: #b2bec3;
+}
+
+.secondary-btn.success-btn {
+    background: #27ae60;
+    color: white;
+    border-color: #2ecc71;
+}
+
 /* Cards & Grid */
 .erp-grid {
     display: grid;

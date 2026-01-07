@@ -823,12 +823,21 @@ function renderCurrentResults() {
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <h3>Performance Summary (${type})</h3>
                 <div style="text-align:right">
-                    <div style="font-size:0.9em; color:#666;">Strategy: <strong>${res.strategyUsed || 'Greedy'}</strong></div>
+                    <div style="font-size:0.9em; color:#666;">
+                        Strategy: 
+                        <select id="strategySelector" onchange="state.optimizationMethod = this.value; saveState(); runOptimization();" style="font-weight:bold; border:1px solid #ccc; border-radius:4px; padding:2px 4px; background:white;">
+                            <option value="auto" ${state.optimizationMethod === 'auto' ? 'selected' : ''}>Auto-Select (Best Performer)</option>
+                            <option value="greedy" ${state.optimizationMethod === 'greedy' ? 'selected' : ''}>Standard Greedy</option>
+                            <option value="leveling" ${state.optimizationMethod === 'leveling' ? 'selected' : ''}>Production Leveling</option>
+                            <option value="lookahead" ${state.optimizationMethod === 'lookahead' ? 'selected' : ''}>Multi-day Look-ahead</option>
+                            <option value="search" ${state.optimizationMethod === 'search' ? 'selected' : ''}>Global Search (Simulated Annealing)</option>
+                        </select>
+                    </div>
                     ${type === 'combined' ? `<div style="font-size:0.8em; color:#888;">Weights: ${state.penaltyWeight}% Penalty / ${state.costWeight}% Cost</div>` : ''}
                 </div>
             </div>
             <div class="form-row">
-                <div class="stat-box"><div class="stat-value">${res.L1.totalPenalty + res.L2.totalPenalty} units</div><div class="stat-label">Total Transit Penalty</div></div>
+                <div class="stat-box"><div class="stat-value">${(res.L1.totalPenalty + res.L2.totalPenalty).toFixed(0)} min</div><div class="stat-label">Total Transit Time</div></div>
                 <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
                 <div class="stat-box"><div class="stat-value">${res.L1.totalLostSales + res.L2.totalLostSales} units</div><div class="stat-label">Lost Sales</div></div>
             </div>
@@ -842,7 +851,16 @@ function renderCurrentResults() {
 }
 
 function renderLineTable(title, res) {
-    let html = `<div class="card full-width"><h3>${title}</h3><table class="result-table">`;
+    const lineId = title.includes('Line 1') ? 'L1' : 'L2';
+    let html = `<div class="card full-width">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #eee; margin-bottom: 10px; padding-bottom: 10px;">
+            <h3 style="margin:0; border:none; padding:0;">${title}</h3>
+            <button class="secondary-btn" onclick="copyLineToClipboard('${lineId}')" title="Copy for Excel">
+                <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px;" viewBox="0 0 24 24"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" /></svg>
+                Copy for Excel
+            </button>
+        </div>
+        <table class="result-table">`;
     html += `<thead><tr>
         <th style="width:100px">Day</th>
         <th>Batch 1</th>
@@ -869,6 +887,44 @@ function renderLineTable(title, res) {
     return html;
 }
 
+function copyLineToClipboard(lineId) {
+    const type = document.getElementById('optGoal').value;
+    if (!state.lastResults || !state.lastResults[type]) return;
+
+    const res = state.lastResults[type][lineId];
+    if (!res) return;
+
+    // Build TSV string
+    let tsv = "Day\tBatch 1\tBatch 2\tBatch 3\n";
+
+    res.schedule.forEach(d => {
+        let row = [DAYS[d.day]];
+        for (let i = 0; i < 3; i++) {
+            const event = d.events[i];
+            if (event) {
+                row.push(`${PRODUCTS[event.p]}: ${event.amount} units`);
+            } else {
+                row.push("-");
+            }
+        }
+        tsv += row.join("\t") + "\n";
+    });
+
+    navigator.clipboard.writeText(tsv).then(() => {
+        const btn = event.currentTarget;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = "Copied!";
+        btn.classList.add('success-btn');
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.classList.remove('success-btn');
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy: ', err);
+        alert('Failed to copy to clipboard');
+    });
+}
+
 // --- Dashboard Logic ---
 
 function renderDashboard() {
@@ -876,7 +932,7 @@ function renderDashboard() {
 
     const line = document.getElementById('dashLine').value; // L1 or L2
     const types = ['time', 'cost', 'combined', 'lostSales'];
-    const typeLabels = { time: 'Min Time', cost: 'Min Cost', combined: 'Combined', lostSales: 'Min Lost Sales' };
+    const typeLabels = { time: 'Min Transit Time', cost: 'Min Cost', combined: 'Combined', lostSales: 'Min Lost Sales' };
 
     // 1. Comparison Chart
     const chartContainer = document.getElementById('comparisonChart');
@@ -902,7 +958,7 @@ function renderDashboard() {
         chartHtml += `
             <div class="chart-group">
                 <div class="chart-bars">
-                    <div class="bar time" style="height: ${Math.max(hPenalty, 5)}%" data-value="Penalty: ${res.totalPenalty} units"></div>
+                    <div class="bar time" style="height: ${Math.max(hPenalty, 5)}%" data-value="Transit Time: ${res.totalPenalty} min"></div>
                     <div class="bar cost" style="height: ${Math.max(hCost, 5)}%" data-value="Cost: $${res.totalCost}"></div>
                     <div class="bar lost" style="height: ${Math.max(hLost, 5)}%" data-value="Lost: ${res.totalLostSales}"></div>
                 </div>
@@ -915,7 +971,7 @@ function renderDashboard() {
     chartContainer.innerHTML = `
         <div style="width:100%; display:flex; flex-direction:column; align-items:center;">
             <div class="legend">
-                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Penalty</div>
+                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Transit Time (min)</div>
                 <div class="legend-item"><div class="dot" style="background:#e74c3c"></div> Cost</div>
                 <div class="legend-item"><div class="dot" style="background:#f1c40f"></div> Lost Sales</div>
             </div>

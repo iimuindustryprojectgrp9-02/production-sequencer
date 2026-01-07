@@ -20,14 +20,14 @@ For each day:
 The solver calculates a "Cost" or "Priority" for each transition from the `lastProduct` produced to a potential `nextProduct`.
 
 ### Symbols
-- $T_{from, to}$: Transition Penalty (Capacity units)
+- $T_{from, to}$: Transition Time (min)
 - $C_{from, to}$: Transition Cost (\$)
 - $W_T$: Penalty Weight ($0.0 \dots 1.0$)
 - $W_C$: Cost Weight ($0.0 \dots 1.0$)
 - $P_{mandatory}$: Units required to clear backlog.
 
-### Minimum Transit Penalty
-Prioritize the transition with the lowest capacity loss.
+### Minimum Transit Time (min)
+Prioritize the transition with the lowest time loss.
 $$\text{Score} = T_{last, next}$$
 *(Lower is better)*
 
@@ -71,5 +71,5 @@ Whenever you click "Run Optimization", the system follows this logic:
 1.  **Manual Override**: If you have selected a specific engine (e.g., "Multi-day Look-ahead") in the Global Parameters, that engine is used directly.
 2.  **Auto-Select**: If "Auto-Select" is chosen, the system runs a mini-benchmark:
     - It executes all 4 strategies (Greedy, Leveling, Look-ahead, Search).
-    - It calculates a **Composite Score**: $$\text{Score} = \text{Total Penalty} + \text{Total Cost} + (\text{Lost Sales} \times 5000)$$
+    - It calculates a **Composite Score**: $$\text{Score} = \text{Total Transit Time (min)} + \text{Total Cost} + (\text{Lost Sales} \times 5000)$$
     - The strategy with the lowest score is selected and applied.
