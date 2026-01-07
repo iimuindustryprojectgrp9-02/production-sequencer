@@ -671,34 +671,36 @@ function solveLineLookAhead(demandMatrix, type) {
             return scoreA - scoreB;
         });
 
-        let trans = getTransition(lastProduct, cand.p);
-        // Transition Calculation (Minutes, does not consume Units capacity)
-        if (lastProduct !== cand.p && lastProduct !== -1) {
-            totalPenalty += trans.penalty;
-            totalCost += trans.cost;
-        }
-        lastProduct = cand.p;
+        for (let cand of candidates) {
+            if (batchesToday >= state.maxBatches) break;
+            let trans = getTransition(lastProduct, cand.p);
+            // Transition Calculation (Minutes, does not consume Units capacity)
+            if (lastProduct !== cand.p && lastProduct !== -1) {
+                totalPenalty += trans.penalty;
+                totalCost += trans.cost;
+            }
+            lastProduct = cand.p;
 
-        // Production (Consumes Units capacity)
-        let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
-        if (amountToProduce > 0) {
-            remainingCapacity -= amountToProduce;
-            batchesToday++;
-            daySchedule.push({ p: cand.p, amount: amountToProduce });
-            let produced = amountToProduce;
-            if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
-            if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
+            // Production (Consumes Units capacity)
+            let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
+            if (amountToProduce > 0) {
+                remainingCapacity -= amountToProduce;
+                batchesToday++;
+                daySchedule.push({ p: cand.p, amount: amountToProduce });
+                let produced = amountToProduce;
+                if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
+                if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
+            }
         }
+
+        let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
+        candidates.forEach(c => {
+            if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
+            if (c.desirable > 0) backlog[c.p] += c.desirable;
+        });
+        schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
     }
-
-    let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
-    candidates.forEach(c => {
-        if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
-        if (c.desirable > 0) backlog[c.p] += c.desirable;
-    });
-    schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
-}
-return { schedule, totalPenalty, totalCost, totalLostSales };
+    return { schedule, totalPenalty, totalCost, totalLostSales };
 }
 
 /**
