@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production Planner ERP</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="erp-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">ProdPlanner <span class="version">v1.0</span></div>
+            <nav>
+                <button class="nav-item active" onclick="switchView('inputs')">Data Entry</button>
+                <button class="nav-item" onclick="switchView('results')">Production Plan</button>
+                <button class="nav-item" onclick="switchView('dashboard')">Dashboard</button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+
+            <!-- Inputs View -->
+            <div id="inputs" class="view-section active">
+                <header class="view-header">
+                    <h2>Master Data & Demand</h2>
+                    <div class="header-actions">
+                        <button class="primary-btn" onclick="runOptimization()">Run Optimization</button>
+                    </div>
+                </header>
+
+                <div class="erp-grid">
+                    <!-- Parameters -->
+                    <div class="card">
+                        <h3>Global Parameters</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Daily Capacity (Mins)</label>
+                                <input type="number" id="dailyCapacity" value="480">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Batch Size</label>
+                                <input type="number" id="maxBatchSize" value="1000">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Batches/Day</label>
+                                <input type="number" id="maxBatches" value="3" readonly style="background:#eee"
+                                    title="Fixed Constraint">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Transition Matrices -->
+                    <div class="card full-width">
+                        <h3>Transition Settings (From Row -> To Col)</h3>
+                        <div class="split-tables">
+                            <div class="table-wrapper">
+                                <h4>Transition Time (Mins)</h4>
+                                <div id="transTimeContainer" class="spreadsheet-grid"></div>
+                            </div>
+                            <div class="table-wrapper">
+                                <h4>Transition Cost ($)</h4>
+                                <div id="transCostContainer" class="spreadsheet-grid"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Demand Tables -->
+                    <div class="card full-width">
+                        <h3>Weekly Demand (Rows: Days, Cols: Products)</h3>
+                        <p class="hint">Tip: You can copy-paste data from Excel directly into these grids.</p>
+
+                        <div class="split-tables">
+                            <div class="table-wrapper">
+                                <h4>Line 1 Demand</h4>
+                                <div id="demandL1Container" class="spreadsheet-grid"></div>
+                            </div>
+                            <div class="table-wrapper">
+                                <h4>Line 2 Demand</h4>
+                                <div id="demandL2Container" class="spreadsheet-grid"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results View -->
+            <div id="results" class="view-section">
+                <header class="view-header">
+                    <h2>Production Schedule</h2>
+                    <div class="header-actions">
+                        <label>Optimization Goal:</label>
+                        <select id="optGoal" onchange="renderCurrentResults()">
+                            <option value="time">Minimum Transit Time</option>
+                            <option value="cost">Minimum Transit Cost</option>
+                            <option value="combined">Combined Min Time & Cost</option>
+                            <option value="lostSales">Minimum Lost Sales</option>
+                        </select>
+                    </div>
+                </header>
+
+                <div id="resultsContent" class="erp-grid">
+                    <div class="placeholder-state">
+                        Please go to Data Entry and click "Run Optimization" first.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dashboard View -->
+            <div id="dashboard" class="view-section">
+                <header class="view-header">
+                    <h2>Analytics Dashboard</h2>
+                    <div class="header-actions">
+                        <label>Select Line:</label>
+                        <select id="dashLine" onchange="renderDashboard()">
+                            <option value="L1">Line 1</option>
+                            <option value="L2">Line 2</option>
+                        </select>
+                    </div>
+                </header>
+
+                <div class="erp-grid">
+                    <!-- Comparison Chart -->
+                    <div class="card full-width">
+                        <h3>Optimization Strategy Comparison (Total for Selected Line)</h3>
+                        <div id="comparisonChart" class="chart-container">
+                            <!-- Dynamic Bar Charts will go here -->
+                        </div>
+                    </div>
+
+                    <!-- Inventory Table -->
+                    <div class="card full-width">
+                        <h3>Daily Inventory Levels (End of Day)</h3>
+                        <div id="dashInventory" class="table-wrapper"></div>
+                    </div>
+
+                    <!-- Lost Sales Table -->
+                    <div class="card full-width">
+                        <h3>Daily Lost Sales</h3>
+                        <div id="dashLostSales" class="table-wrapper"></div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+
+</html>

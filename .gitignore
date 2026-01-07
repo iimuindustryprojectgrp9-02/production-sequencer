@@ -1,0 +1,12 @@
+
+# System Files
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
