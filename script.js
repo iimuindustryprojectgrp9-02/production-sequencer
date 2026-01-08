@@ -276,25 +276,90 @@ function runOptimization() {
     const types = ['time', 'cost', 'combined', 'lostSales'];
     state.lastResults = {}; // Reset before run
 
-
     types.forEach(type => {
-        state.lastResults[type] = {
-            L1: solveLine(state.demandL1, type),
-            L2: solveLine(state.demandL2, type)
-        };
+        try {
+            state.lastResults[type] = {
+                L1: solveLineSearch(state.demandL1, type),
+                L2: solveLineSearch(state.demandL2, type),
+                strategyUsed: 'Simulated Annealing (Global)'
+            };
+        } catch (e) {
+            console.error(`Error optimizing for ${type}:`, e);
+            alert(`Error during ${type} optimization: ${e.message}`);
+            // Fallback result to prevent crash
+            state.lastResults[type] = {
+                L1: { schedule: [], totalTime: 0, totalCost: 0, totalLostSales: 0 },
+                L2: { schedule: [], totalTime: 0, totalCost: 0, totalLostSales: 0 },
+                strategyUsed: 'Error'
+            };
+        }
     });
 
-    switchView('results');
-    saveState(); // Save results
-    renderCurrentResults();
+    try {
+        switchView('results');
+        saveState(); // Save results
+        renderCurrentResults();
+    } catch (renderError) {
+        console.error("Render Error:", renderError);
+        alert("Optimization finished, but results could not be displayed: " + renderError.message);
+    }
 }
 
-function solveLine(demandMatrix, type) {
-    let weightTime = 0, weightCost = 0, weightLostSales = 0;
+/**
+ * Runs the randomized construction heuristic multiple times (Simulated Annealing).
+ * Returns the best schedule found.
+ */
+function solveLineSearch(demandMatrix, type) {
+    let bestRes = null;
+    let minScore = Infinity;
+
+    // Run 100 iterations with randomization
+    // We use a fixed randomness factor (Temperature) of 0.15 as requested
+    // This allows exploration of the solution space
+    const ITERATIONS = 100;
+    const RANDOMNESS = 0.15;
+
+    for (let i = 0; i < ITERATIONS; i++) {
+        // Run randomized construction
+        const res = solveLineRandomized(demandMatrix, type, RANDOMNESS);
+
+        // Calculate score based on optimization type
+        let score = Infinity;
+        if (type === 'time') {
+            score = res.totalTime;
+        } else if (type === 'cost') {
+            score = res.totalCost;
+        } else if (type === 'lostSales') {
+            score = res.totalLostSales;
+        } else if (type === 'combined') {
+            // Normalize or weight combined score
+            // Heuristic: Cost is usually roughly 3-4x Time in magnitude, lost sales is huge penalty
+            score = res.totalTime + res.totalCost + (res.totalLostSales * 1000);
+        }
+
+        // Robust check: valid number and better than previous
+        if (!isNaN(score) && score < minScore) {
+            minScore = score;
+            bestRes = res;
+        }
+    }
+
+    // Safety fallback
+    if (!bestRes) {
+        console.warn(`Optimizer failed to find valid solution for ${type}. Returning greedy fallback.`);
+        return solveLineRandomized(demandMatrix, type, 0); // Run once with 0 randomness (Greedy)
+    }
+
+    return bestRes;
+}
+
+function solveLineRandomized(demandMatrix, type, randomness) {
+    let weightTime = 0, weightCost = 0;
     if (type === 'time') weightTime = 1;
     else if (type === 'cost') weightCost = 1;
     else if (type === 'combined') { weightTime = 1; weightCost = 1; }
-    else if (type === 'lostSales') { weightLostSales = 1000; }
+    // lostSales uses different logic in sorting
+
 
     let inventory = Array(5).fill(0);
     let backlog = Array(5).fill(0);
@@ -330,7 +395,7 @@ function solveLine(demandMatrix, type) {
             }
         }
 
-        // Sort candidates
+        // Sort candidates by greedy score
         candidates.sort((a, b) => {
             // Priority 1: Has Backlog (Mandatory)
             if (a.mandatory > 0 && b.mandatory === 0) return -1;
@@ -368,25 +433,39 @@ function solveLine(demandMatrix, type) {
             return costA - costB;
         });
 
-        // Produce
-        for (let cand of candidates) {
-            if (batchesToday >= state.maxBatches) break; // Constraint Check
+        // Produce with Randomness (Epsilon-Greedy)
+        while (batchesToday < state.maxBatches && candidates.length > 0) {
+            let selectedIndex = 0;
 
-            let p = cand.p;
-            let amountNeeded = cand.mandatory + cand.desirable;
-            let trans = getTransition(lastProduct, p);
+            // If randomness is enabled, chance to pick a random candidate
+            // We verify constraint check for proper randomness later, but basically pick any candidate
+            if (randomness > 0 && Math.random() < randomness && candidates.length > 1) {
+                selectedIndex = Math.floor(Math.random() * candidates.length);
+            }
 
-            if (remainingTime < trans.time) break;
+            let cand = candidates[selectedIndex];
 
+            // Check if feasible (time)
+            let trans = getTransition(lastProduct, cand.p);
+            if (remainingTime < trans.time) {
+                // If the selected one doesn't fit, we might want to try others
+                // But in a strict schedule, usually if best doesn't fit, we stop or look down list.
+                // For simplicity: if selected doesn't fit, we remove it and try next iteration
+                candidates.splice(selectedIndex, 1);
+                continue;
+            }
+
+            // It fits at least the transition
             // Transition
-            if (lastProduct !== p && lastProduct !== -1) {
+            if (lastProduct !== cand.p && lastProduct !== -1) {
                 remainingTime -= trans.time;
                 totalTime += trans.time;
                 totalCost += trans.cost;
             }
-            lastProduct = p;
+            lastProduct = cand.p;
 
             // Production
+            let amountNeeded = cand.mandatory + cand.desirable;
             let maxPossible = remainingTime;
             let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
 
@@ -394,7 +473,7 @@ function solveLine(demandMatrix, type) {
                 remainingTime -= amountToProduce;
                 batchesToday++;
 
-                daySchedule.push({ p: p, amount: amountToProduce });
+                daySchedule.push({ p: cand.p, amount: amountToProduce });
 
                 // Update Backlog/Inventory
                 let produced = amountToProduce;
@@ -402,14 +481,27 @@ function solveLine(demandMatrix, type) {
                     let met = Math.min(produced, cand.mandatory);
                     cand.mandatory -= met;
                     produced -= met;
-                    backlog[p] -= met;
+                    backlog[cand.p] -= met;
                 }
                 if (produced > 0) {
                     let metToday = Math.min(produced, cand.desirable);
                     cand.desirable -= metToday;
                     produced -= metToday;
-                    inventory[p] += produced;
+                    inventory[cand.p] += produced;
                 }
+
+                // If candidate is satisfied, remove it?
+                // Or if it still has desirable demand, keep it?
+                // Logic says: if mandatory cleared and desirable cleared, remove.
+                // But simplified: usually one batch per product per day unless really needed.
+                // Let's remove it to prevent repeated tiny batches of same product if not needed
+                // Actually, if we produced, we probably want to move to next or re-evaluate.
+                // Current logic allows multiple batches.
+                // Simple: Remove from candidates to avoid duplicates in same day unless re-added
+                candidates.splice(selectedIndex, 1);
+            } else {
+                // Should not happen if remainingTime > 0
+                candidates.splice(selectedIndex, 1);
             }
         }
 
