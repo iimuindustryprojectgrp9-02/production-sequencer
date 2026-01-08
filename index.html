@@ -6,12 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Production Planner ERP</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
     <div class="erp-container">
         <!-- Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
             <div class="brand">ProdPlanner <span class="version">v1.0</span></div>
             <nav>
                 <button class="nav-item active" onclick="switchView('inputs')">Data Entry</button>
@@ -19,6 +20,9 @@
                 <button class="nav-item" onclick="switchView('dashboard')">Dashboard</button>
             </nav>
         </aside>
+
+        <!-- Vertical Resizer -->
+        <div id="resizer" class="resizer"></div>
 
         <!-- Main Content -->
         <main class="main-content">
@@ -34,11 +38,11 @@
 
                 <div class="erp-grid">
                     <!-- Parameters -->
-                    <div class="card">
+                    <div class="card full-width">
                         <h3>Global Parameters</h3>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Daily Capacity (Mins)</label>
+                                <label>Daily Capacity (Units)</label>
                                 <input type="number" id="dailyCapacity" value="480">
                             </div>
                             <div class="form-group">
@@ -47,10 +51,22 @@
                             </div>
                             <div class="form-group">
                                 <label>Max Batches/Day</label>
-                                <input type="number" id="maxBatches" value="3" readonly style="background:#eee"
-                                    title="Fixed Constraint">
+                                <input type="number" id="maxBatches" value="3" readonly title="Fixed Constraint">
+                            </div>
+
+                            <div class="form-divider"></div>
+
+                            <div class="form-group">
+                                <label>Time Weight (%)</label>
+                                <input type="number" id="timeWeight" value="50" min="0" max="100">
+                            </div>
+                            <div class="form-group">
+                                <label>Cost Weight (%)</label>
+                                <input type="number" id="costWeight" value="50" min="0" max="100">
                             </div>
                         </div>
+                        <p class="hint">Note: Weights must total 100%. Adjusting one balance will auto-update the other.
+                        </p>
                     </div>
 
                     <!-- Transition Matrices -->
@@ -70,7 +86,7 @@
 
                     <!-- Demand Tables -->
                     <div class="card full-width">
-                        <h3>Weekly Demand (Rows: Days, Cols: Products)</h3>
+                        <h3>Weekly Demand (Assumption: Repeated for next week)</h3>
                         <p class="hint">Tip: You can copy-paste data from Excel directly into these grids.</p>
 
                         <div class="split-tables">
@@ -94,8 +110,8 @@
                     <div class="header-actions">
                         <label>Optimization Goal:</label>
                         <select id="optGoal" onchange="renderCurrentResults()">
-                            <option value="time">Minimum Transit Time</option>
-                            <option value="cost">Minimum Transit Cost</option>
+                            <option value="time">Minimum Transition Time</option>
+                            <option value="cost">Minimum Transition Cost</option>
                             <option value="combined">Combined Min Time & Cost</option>
                             <option value="lostSales">Minimum Lost Sales</option>
                         </select>
@@ -122,25 +138,53 @@
                     </div>
                 </header>
 
-                <div class="erp-grid">
-                    <!-- Comparison Chart -->
-                    <div class="card full-width">
-                        <h3>Optimization Strategy Comparison (Total for Selected Line)</h3>
-                        <div id="comparisonChart" class="chart-container">
-                            <!-- Dynamic Bar Charts will go here -->
+                <!-- Product Summary Statistics Table -->
+                <div class="card full-width" style="margin-bottom: 20px;">
+                    <h3>Product Summary Statistics (per Line)</h3>
+                    <div id="productSummaryContainer" class="table-wrapper">
+                        <!-- Table will be injected here -->
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <!-- Chart 1: Daily Demand per Product (Line Graph) -->
+                    <div class="card">
+                        <h3 class="compact-header">Daily Demand per Product</h3>
+                        <div class="chart-container-compact">
+                            <canvas id="demandLineChart"></canvas>
                         </div>
                     </div>
 
-                    <!-- Inventory Table -->
-                    <div class="card full-width">
-                        <h3>Daily Inventory Levels (End of Day)</h3>
-                        <div id="dashInventory" class="table-wrapper"></div>
+                    <!-- Chart 2: Daily Transition Time Comparison -->
+                    <div class="card">
+                        <h3 class="compact-header">Transition Time (All Goals)</h3>
+                        <div class="chart-container-compact">
+                            <canvas id="timeLineChart"></canvas>
+                        </div>
                     </div>
 
-                    <!-- Lost Sales Table -->
-                    <div class="card full-width">
-                        <h3>Daily Lost Sales</h3>
-                        <div id="dashLostSales" class="table-wrapper"></div>
+                    <!-- Chart 3: Daily Transition Cost Comparison -->
+                    <div class="card">
+                        <h3 class="compact-header">Transition Cost (All Goals)</h3>
+                        <div class="chart-container-compact">
+                            <canvas id="costLineChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Chart 4: Inventory Buildup (Stacked Area) -->
+                    <div class="card">
+                        <h3 class="compact-header">Product Inventory (Daily)</h3>
+                        <div class="chart-container-compact">
+                            <canvas id="inventoryAreaChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Chart 5: Lost Sales per Product (Grouped Bar) -->
+                    <div class="card">
+                        <h3 class="compact-header">Lost Sales per Product</h3>
+                        <div class="chart-container-compact">
+                            <canvas id="lostSalesBarChart"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>

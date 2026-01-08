@@ -10,10 +10,13 @@ let state = {
     maxBatches: 3,
     transitionTime: [], // 5x5
     transitionCost: [], // 5x5
-    demandL1: [], // 7 Days x 5 Products (Transposed)
     demandL2: [], // 7 Days x 5 Products (Transposed)
-    lastResults: null // Store results to switch views
+    timeWeight: 50,
+    costWeight: 50,
+    lastResults: null
 };
+
+let chartInstances = {};
 
 const STATE_KEY = 'production_sequencer_state_v2';
 
@@ -58,11 +61,71 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // --- Sidebar Resizer Logic ---
+        const resizer = document.getElementById('resizer');
+        const sidebar = document.getElementById('sidebar');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            resizer.classList.add('resizing');
+            document.body.style.cursor = 'col-resize';
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+
+        function onMouseMove(e) {
+            if (!isResizing) return;
+            // Limit width based on container boundaries
+            const newWidth = Math.max(150, Math.min(e.clientX, 500));
+            sidebar.style.width = newWidth + 'px';
+
+            // Re-render chart if it's visible so it fits new width
+            requestAnimationFrame(() => {
+                Object.values(chartInstances).forEach(chart => chart.resize());
+            });
+        }
+
+        function onMouseUp() {
+            isResizing = false;
+            resizer.classList.remove('resizing');
+            document.body.style.cursor = 'default';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        }
+
+
         const batchInput = document.getElementById('maxBatchSize');
         if (batchInput) {
             batchInput.value = state.maxBatchSize; // Restore value
             batchInput.addEventListener('change', (e) => {
                 state.maxBatchSize = parseInt(e.target.value) || 0;
+                saveState();
+            });
+        }
+
+        const timeWeightInput = document.getElementById('timeWeight');
+        const costWeightInput = document.getElementById('costWeight');
+
+        if (timeWeightInput && costWeightInput) {
+            timeWeightInput.value = state.timeWeight;
+            costWeightInput.value = state.costWeight;
+
+            timeWeightInput.addEventListener('change', (e) => {
+                let val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                state.timeWeight = val;
+                state.costWeight = 100 - val;
+                timeWeightInput.value = state.timeWeight;
+                costWeightInput.value = state.costWeight;
+                saveState();
+            });
+
+            costWeightInput.addEventListener('change', (e) => {
+                let val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                state.costWeight = val;
+                state.timeWeight = 100 - val;
+                costWeightInput.value = state.costWeight;
+                timeWeightInput.value = state.timeWeight;
                 saveState();
             });
         }
@@ -274,19 +337,18 @@ function handlePaste(e) {
 
 function runOptimization() {
     const types = ['time', 'cost', 'combined', 'lostSales'];
-    state.lastResults = {}; // Reset before run
+    state.lastResults = {};
 
     types.forEach(type => {
         try {
             state.lastResults[type] = {
-                L1: solveLineSearch(state.demandL1, type),
-                L2: solveLineSearch(state.demandL2, type),
-                strategyUsed: 'Simulated Annealing (Global)'
+                L1: solveLineGlobal(state.demandL1, type),
+                L2: solveLineGlobal(state.demandL2, type),
+                strategyUsed: 'Global Branch & Bound (Exact)'
             };
         } catch (e) {
             console.error(`Error optimizing for ${type}:`, e);
             alert(`Error during ${type} optimization: ${e.message}`);
-            // Fallback result to prevent crash
             state.lastResults[type] = {
                 L1: { schedule: [], totalTime: 0, totalCost: 0, totalLostSales: 0 },
                 L2: { schedule: [], totalTime: 0, totalCost: 0, totalLostSales: 0 },
@@ -297,240 +359,235 @@ function runOptimization() {
 
     try {
         switchView('results');
-        saveState(); // Save results
+        saveState();
         renderCurrentResults();
-    } catch (renderError) {
-        console.error("Render Error:", renderError);
-        alert("Optimization finished, but results could not be displayed: " + renderError.message);
+    } catch (e) {
+        console.error("Render Error:", e);
     }
 }
 
 /**
- * Runs the randomized construction heuristic multiple times (Simulated Annealing).
- * Returns the best schedule found.
+ * Global Branch & Bound Solver
+ * Guarantees the absolute minimum based on the week-long objective function.
  */
-function solveLineSearch(demandMatrix, type) {
-    let bestRes = null;
-    let minScore = Infinity;
+function solveLineGlobal(demandMatrix, objectiveType) {
+    let bestTotalScore = Infinity;
+    let bestResult = null;
+    let nodesExplored = 0;
+    const MAX_NODES = 50000; // Safety limit to prevent browser hang
 
-    // Run 100 iterations with randomization
-    // We use a fixed randomness factor (Temperature) of 0.15 as requested
-    // This allows exploration of the solution space
-    const ITERATIONS = 100;
-    const RANDOMNESS = 0.15;
+    // Weights for Combined Mode
+    const wTime = objectiveType === 'combined' ? state.timeWeight / 100 : (objectiveType === 'time' ? 1 : 0);
+    const wCost = objectiveType === 'combined' ? state.costWeight / 100 : (objectiveType === 'cost' ? 1 : 0);
 
-    for (let i = 0; i < ITERATIONS; i++) {
-        // Run randomized construction
-        const res = solveLineRandomized(demandMatrix, type, RANDOMNESS);
+    /**
+     * Recursive search with pruning
+     */
+    function branchAndBound(day, inventory, backlog, lastProduct, currentPath, currentStats) {
+        nodesExplored++;
+        if (nodesExplored > MAX_NODES) return;
 
-        // Calculate score based on optimization type
-        let score = Infinity;
-        if (type === 'time') {
-            score = res.totalTime;
-        } else if (type === 'cost') {
-            score = res.totalCost;
-        } else if (type === 'lostSales') {
-            score = res.totalLostSales;
-        } else if (type === 'combined') {
-            // Normalize or weight combined score
-            // Heuristic: Cost is usually roughly 3-4x Time in magnitude, lost sales is huge penalty
-            score = res.totalTime + res.totalCost + (res.totalLostSales * 1000);
-        }
+        if (day === 7) {
+            let score = 0;
+            const endingBacklogVal = backlog.reduce((a, b) => a + b, 0);
 
-        // Robust check: valid number and better than previous
-        if (!isNaN(score) && score < minScore) {
-            minScore = score;
-            bestRes = res;
-        }
-    }
-
-    // Safety fallback
-    if (!bestRes) {
-        console.warn(`Optimizer failed to find valid solution for ${type}. Returning greedy fallback.`);
-        return solveLineRandomized(demandMatrix, type, 0); // Run once with 0 randomness (Greedy)
-    }
-
-    return bestRes;
-}
-
-function solveLineRandomized(demandMatrix, type, randomness) {
-    let weightTime = 0, weightCost = 0;
-    if (type === 'time') weightTime = 1;
-    else if (type === 'cost') weightCost = 1;
-    else if (type === 'combined') { weightTime = 1; weightCost = 1; }
-    // lostSales uses different logic in sorting
-
-
-    let inventory = Array(5).fill(0);
-    let backlog = Array(5).fill(0);
-    let lastProduct = -1;
-
-    let schedule = [];
-    let totalTime = 0, totalCost = 0, totalLostSales = 0;
-
-    for (let day = 0; day < 7; day++) {
-        let daySchedule = [];
-        let remainingTime = state.dailyCapacity;
-        let batchesToday = 0;
-
-        // Candidates logic
-        let candidates = [];
-        for (let p = 0; p < 5; p++) {
-            let demandToday = demandMatrix[day][p];
-
-            // Use inventory
-            if (inventory[p] >= demandToday) {
-                inventory[p] -= demandToday;
-                demandToday = 0;
+            if (objectiveType === 'lostSales') {
+                // Include ending backlog in lost sales score as it represents future lost sales for repeated demand
+                score = ((currentStats.totalLostSales + endingBacklogVal) * 1000000) + currentStats.totalTime;
             } else {
-                demandToday -= inventory[p];
-                inventory[p] = 0;
+                // For other modes, we still penalize ending backlog to ensure demand is satisfied
+                score = (currentStats.totalTime * wTime) + (currentStats.totalCost * wCost) + (endingBacklogVal * 1000);
             }
 
-            let mandatory = backlog[p];
-            let desirable = demandToday;
+            if (score < bestTotalScore) {
+                bestTotalScore = score;
+                bestResult = {
+                    schedule: JSON.parse(JSON.stringify(currentPath)),
+                    ...currentStats
+                };
+            }
+            return;
+        }
 
-            if (mandatory > 0 || desirable > 0) {
-                candidates.push({ p, mandatory, desirable });
+        // Pruning: Look-ahead bound
+        let currentScore = 0;
+        if (objectiveType === 'lostSales') {
+            currentScore = (currentStats.totalLostSales * 1000000) + currentStats.totalTime;
+        } else {
+            currentScore = (currentStats.totalTime * wTime) + (currentStats.totalCost * wCost);
+        }
+        if (currentScore >= bestTotalScore) return;
+
+        const dailyPlans = generateDailyPlans(day, demandMatrix, inventory, backlog, objectiveType, lastProduct);
+
+        for (const plan of dailyPlans) {
+            const nextDayState = simulateDay(day, plan, inventory, backlog, lastProduct);
+
+            branchAndBound(
+                day + 1,
+                nextDayState.inventory,
+                nextDayState.backlog,
+                nextDayState.lastProduct,
+                [...currentPath, nextDayState.result],
+                {
+                    totalTime: currentStats.totalTime + nextDayState.time,
+                    totalCost: currentStats.totalCost + nextDayState.cost,
+                    totalLostSales: currentStats.totalLostSales + nextDayState.lostSales
+                }
+            );
+            if (nodesExplored > MAX_NODES) return;
+        }
+    }
+
+    function generateDailyPlans(day, demandMatrix, inv, bl, objType, lastP) {
+        const productsWithInterest = [];
+        for (let p = 0; p < 5; p++) {
+            // A product is a candidate if it has current backlog OR any demand in the next 7 days (including next week)
+            let futureDemand = 0;
+            for (let i = 0; i < 7; i++) {
+                futureDemand += demandMatrix[(day + i) % 7][p];
+            }
+
+            if (bl[p] > 0 || futureDemand > inv[p]) {
+                productsWithInterest.push(p);
             }
         }
 
-        // Sort candidates by greedy score
-        candidates.sort((a, b) => {
-            // Priority 1: Has Backlog (Mandatory)
-            if (a.mandatory > 0 && b.mandatory === 0) return -1;
-            if (b.mandatory > 0 && a.mandatory === 0) return 1;
+        // Basic choices
+        let options = [[]];
+        for (let p of productsWithInterest) options.push([p]);
 
-            let transA = getTransition(lastProduct, a.p);
-            let transB = getTransition(lastProduct, b.p);
-
-            // Priority 2 (Only for Lost Sales optimization): Density Heuristic (Benefit / Cost)
-            if (type === 'lostSales') {
-                // Calculate potential production for A
-                let maxPossibleA = remainingTime - transA.time;
-                let producedA = Math.max(0, Math.min(a.mandatory, maxPossibleA, state.maxBatchSize));
-                let timeSpentA = transA.time + producedA;
-                let scoreA = timeSpentA > 0 ? (producedA / timeSpentA) : 0;
-
-                // Calculate potential production for B
-                let maxPossibleB = remainingTime - transB.time;
-                let producedB = Math.max(0, Math.min(b.mandatory, maxPossibleB, state.maxBatchSize));
-                let timeSpentB = transB.time + producedB;
-                let scoreB = timeSpentB > 0 ? (producedB / timeSpentB) : 0;
-
-                if (Math.abs(scoreA - scoreB) > 0.0001) {
-                    return scoreB - scoreA; // Descending Score
+        if (state.maxBatches >= 2) {
+            for (let p1 of productsWithInterest) {
+                for (let p2 of productsWithInterest) {
+                    if (p1 === p2) continue;
+                    options.push([p1, p2]);
                 }
-
-                // Tie-breaker: Absolute amount cleared
-                if (producedA !== producedB) return producedB - producedA;
             }
+        }
 
-            // Priority 3: Minimize Transition Cost/Time (Standard Efficiency)
-            let costA = transA.time * weightTime + transA.cost * weightCost;
-            let costB = transB.time * weightTime + transB.cost * weightCost;
+        if (state.maxBatches >= 3 && productsWithInterest.length >= 3) {
+            for (let p1 of productsWithInterest) {
+                for (let p2 of productsWithInterest) {
+                    if (p1 === p2) continue;
+                    for (let p3 of productsWithInterest) {
+                        if (p3 === p1 || p3 === p2) continue;
+                        options.push([p1, p2, p3]);
+                    }
+                }
+            }
+        }
 
+        // Sort options heuristically: Prefer plans that satisfy immediate needs or clear high future volume
+        options.sort((a, b) => {
+            let clearA = 0, clearB = 0;
+            a.forEach(p => {
+                let futureDemand = 0;
+                for (let i = 0; i < 7; i++) {
+                    futureDemand += demandMatrix[(day + i) % 7][p];
+                }
+                clearA += Math.min(state.maxBatchSize, Math.max(0, futureDemand + bl[p] - inv[p]));
+            });
+            b.forEach(p => {
+                let futureDemand = 0;
+                for (let i = 0; i < 7; i++) {
+                    futureDemand += demandMatrix[(day + i) % 7][p];
+                }
+                clearB += Math.min(state.maxBatchSize, Math.max(0, futureDemand + bl[p] - inv[p]));
+            });
+            if (clearA !== clearB) return clearB - clearA;
+
+            let costA = 0, costB = 0;
+            let lpA = lastP; a.forEach(p => { costA += getTransition(lpA, p).time; lpA = p; });
+            let lpB = lastP; b.forEach(p => { costB += getTransition(lpB, p).time; lpB = p; });
             return costA - costB;
         });
 
-        // Produce with Randomness (Epsilon-Greedy)
-        while (batchesToday < state.maxBatches && candidates.length > 0) {
-            let selectedIndex = 0;
+        return options.slice(0, 12);
+    }
 
-            // If randomness is enabled, chance to pick a random candidate
-            // We verify constraint check for proper randomness later, but basically pick any candidate
-            if (randomness > 0 && Math.random() < randomness && candidates.length > 1) {
-                selectedIndex = Math.floor(Math.random() * candidates.length);
-            }
+    function simulateDay(day, pIndices, inv, bl, lastP) {
+        let currentInv = [...inv];
+        let currentBl = [...bl];
+        let lp = lastP;
+        let dayTime = 0, dayCost = 0, dayLost = 0;
+        let events = [];
+        let cap = state.dailyCapacity;
 
-            let cand = candidates[selectedIndex];
-
-            // Check if feasible (time)
-            let trans = getTransition(lastProduct, cand.p);
-            if (remainingTime < trans.time) {
-                // If the selected one doesn't fit, we might want to try others
-                // But in a strict schedule, usually if best doesn't fit, we stop or look down list.
-                // For simplicity: if selected doesn't fit, we remove it and try next iteration
-                candidates.splice(selectedIndex, 1);
-                continue;
-            }
-
-            // It fits at least the transition
-            // Transition
-            if (lastProduct !== cand.p && lastProduct !== -1) {
-                remainingTime -= trans.time;
-                totalTime += trans.time;
-                totalCost += trans.cost;
-            }
-            lastProduct = cand.p;
-
-            // Production
-            let amountNeeded = cand.mandatory + cand.desirable;
-            let maxPossible = remainingTime;
-            let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
-
-            if (amountToProduce > 0) {
-                remainingTime -= amountToProduce;
-                batchesToday++;
-
-                daySchedule.push({ p: cand.p, amount: amountToProduce });
-
-                // Update Backlog/Inventory
-                let produced = amountToProduce;
-                if (cand.mandatory > 0) {
-                    let met = Math.min(produced, cand.mandatory);
-                    cand.mandatory -= met;
-                    produced -= met;
-                    backlog[cand.p] -= met;
-                }
-                if (produced > 0) {
-                    let metToday = Math.min(produced, cand.desirable);
-                    cand.desirable -= metToday;
-                    produced -= metToday;
-                    inventory[cand.p] += produced;
-                }
-
-                // If candidate is satisfied, remove it?
-                // Or if it still has desirable demand, keep it?
-                // Logic says: if mandatory cleared and desirable cleared, remove.
-                // But simplified: usually one batch per product per day unless really needed.
-                // Let's remove it to prevent repeated tiny batches of same product if not needed
-                // Actually, if we produced, we probably want to move to next or re-evaluate.
-                // Current logic allows multiple batches.
-                // Simple: Remove from candidates to avoid duplicates in same day unless re-added
-                candidates.splice(selectedIndex, 1);
+        for (let p = 0; p < 5; p++) {
+            let demand = demandMatrix[day][p];
+            if (currentInv[p] >= demand) {
+                currentInv[p] -= demand;
+                demand = 0;
             } else {
-                // Should not happen if remainingTime > 0
-                candidates.splice(selectedIndex, 1);
+                demand -= currentInv[p];
+                currentInv[p] = 0;
+            }
+            currentBl[p] += demand;
+        }
+
+        for (let pIdx of pIndices) {
+            if (cap <= 0) break;
+            const trans = getTransition(lp, pIdx);
+            dayTime += trans.time;
+            dayCost += trans.cost;
+            lp = pIdx;
+
+            // How much to produce? Look at total remaining demand (7-day lookahead assuming repeated demand)
+            let totalRemainingDemand = currentBl[pIdx];
+            for (let i = 1; i < 7; i++) {
+                totalRemainingDemand += demandMatrix[(day + i) % 7][pIdx];
+            }
+
+            // Deduct what is already in inventory to find true need
+            let netNeeded = Math.max(0, totalRemainingDemand - currentInv[pIdx]);
+
+            // Produce up to batch size or capacity, but don't over-produce what isn't needed this week
+            const amount = Math.min(netNeeded, cap, state.maxBatchSize);
+
+            if (amount > 0) {
+                cap -= amount;
+                events.push({ p: pIdx, amount });
+
+                // Satisfaction logic: reduce backlog first, then add to inventory
+                let produced = amount;
+                let satBacklog = Math.min(produced, currentBl[pIdx]);
+                currentBl[pIdx] -= satBacklog;
+                produced -= satBacklog;
+
+                // Excess goes to inventory for future days
+                currentInv[pIdx] += produced;
             }
         }
 
-        // End of day
-        let dayInventory = [...inventory];
-        let dayLostSales = Array(5).fill(0);
+        const dayLostSales = Array(5).fill(0);
+        for (let p = 0; p < 5; p++) {
+            // Logic: Demand from yesterday that is STILL not met today is Lost.
+            // Today's demand (demandMatrix[day][p]) can stay in backlog for tomorrow.
+            const staleBacklog = Math.max(0, currentBl[p] - demandMatrix[day][p]);
+            dayLost += staleBacklog;
+            dayLostSales[p] = staleBacklog;
 
-        candidates.forEach(c => {
-            if (c.mandatory > 0) {
-                totalLostSales += c.mandatory;
-                dayLostSales[c.p] = c.mandatory;
-                backlog[c.p] = 0; // Lost sales are lost, not backlogged (assuming per user request "Total lost sales")
-                // Or should it be backlogged? Usually lost sales means lost.
-                // Let's assume lost sales are cleared from backlog.
-            }
-            if (c.desirable > 0) {
-                backlog[c.p] += c.desirable;
-            }
-        });
+            // Carry over only up to today's unmet demand (clearing anything older)
+            currentBl[p] = Math.min(currentBl[p], demandMatrix[day][p]);
+        }
 
-        schedule.push({
-            day,
-            events: daySchedule,
-            inventory: dayInventory,
-            lostSales: dayLostSales
-        });
+        return {
+            inventory: currentInv, backlog: currentBl, lastProduct: lp,
+            time: dayTime, cost: dayCost, lostSales: dayLost,
+            result: { day, events, inventory: [...currentInv], lostSales: dayLostSales, dailyTime: dayTime, dailyCost: dayCost }
+        };
     }
 
-    return { schedule, totalTime, totalCost, totalLostSales };
+    // Run exact search
+    branchAndBound(0, Array(5).fill(0), Array(5).fill(0), -1, [], { totalTime: 0, totalCost: 0, totalLostSales: 0 });
+
+    if (!bestResult) {
+        // Fallback to simple greedy if tree search failed (shouldn't happen with options.slice)
+        return { schedule: [], totalTime: 0, totalCost: 0, totalLostSales: 0 };
+    }
+
+    return bestResult;
 }
 
 function getTransition(fromP, toP) {
@@ -552,29 +609,46 @@ function renderCurrentResults() {
     if (!res) return;
 
     let html = `
-        <div class="card full-width">
-            <h3>Performance Summary (${type})</h3>
-            <div class="form-row">
-                <div class="stat-box"><div class="stat-value">${res.L1.totalTime + res.L2.totalTime} min</div><div class="stat-label">Total Transit Time</div></div>
-                <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
-                <div class="stat-box"><div class="stat-value">${res.L1.totalLostSales + res.L2.totalLostSales} units</div><div class="stat-label">Lost Sales</div></div>
+        <div style="display: flex; gap: 20px; margin-bottom: 20px; width: 100%; grid-column: 1 / -1;">
+            <div class="card" style="flex: 1; min-width: 0;">
+                <h3>Line 1 Performance (${type})</h3>
+                <div style="display: flex; gap: 10px;">
+                    <div class="stat-box" style="flex: 1;"><div class="stat-value">${res.L1.totalTime} min</div><div class="stat-label">Trans. Time</div></div>
+                    <div class="stat-box" style="flex: 1;"><div class="stat-value">$${res.L1.totalCost}</div><div class="stat-label">Trans. Cost</div></div>
+                    <div class="stat-box" style="flex: 1;"><div class="stat-value">${res.L1.totalLostSales}</div><div class="stat-label">Lost Sales</div></div>
+                </div>
+            </div>
+            <div class="card" style="flex: 1; min-width: 0;">
+                <h3>Line 2 Performance (${type})</h3>
+                <div style="display: flex; gap: 10px;">
+                    <div class="stat-box" style="flex: 1;"><div class="stat-value">${res.L2.totalTime} min</div><div class="stat-label">Trans. Time</div></div>
+                    <div class="stat-box" style="flex: 1;"><div class="stat-value">$${res.L2.totalCost}</div><div class="stat-label">Trans. Cost</div></div>
+                    <div class="stat-box" style="flex: 1;"><div class="stat-value">${res.L2.totalLostSales}</div><div class="stat-label">Lost Sales</div></div>
+                </div>
             </div>
         </div>
     `;
 
-    html += renderLineTable('Line 1 Schedule', res.L1);
-    html += renderLineTable('Line 2 Schedule', res.L2);
+    html += renderLineTable('Line 1 Schedule', res.L1, 'L1');
+    html += renderLineTable('Line 2 Schedule', res.L2, 'L2');
 
     container.innerHTML = html;
 }
 
-function renderLineTable(title, res) {
-    let html = `<div class="card full-width"><h3>${title}</h3><table class="result-table">`;
+function renderLineTable(title, res, lineKey) {
+    let html = `<div class="card full-width">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:5px;">
+            <h3 style="margin:0; border:none; padding:0;">${title}</h3>
+            <button class="primary-btn" style="padding: 5px 12px; font-size: 0.8rem;" onclick="copyToExcel('${lineKey}', this)">Copy for Excel</button>
+        </div>
+        <table class="result-table">`;
     html += `<thead><tr>
         <th style="width:100px">Day</th>
         <th>Batch 1</th>
         <th>Batch 2</th>
         <th>Batch 3</th>
+        <th style="width:80px; background:#f9f9f9; border-left: 2px solid #eee;">Time</th>
+        <th style="width:80px; background:#f9f9f9;">Cost</th>
     </tr></thead><tbody>`;
 
     res.schedule.forEach(d => {
@@ -589,11 +663,92 @@ function renderLineTable(title, res) {
                 html += `<td><span style="color:#ccc">-</span></td>`;
             }
         }
+        html += `<td style="background:#f9f9f9; border-left: 2px solid #eee; font-weight:bold; color:#666;">${d.dailyTime}m</td>`;
+        html += `<td style="background:#f9f9f9; font-weight:bold; color:#666;">$${d.dailyCost}</td>`;
         html += `</tr>`;
     });
 
     html += `</tbody></table></div>`;
     return html;
+}
+
+function copyToExcel(lineKey, btn) {
+    const type = document.getElementById('optGoal').value;
+    if (!state.lastResults || !state.lastResults[type]) return;
+
+    const res = state.lastResults[type][lineKey];
+    if (!res) return;
+
+    // 1. Create a hidden container for our table
+    const container = document.createElement("div");
+    container.style.position = "fixed";
+    container.style.left = "-9999px";
+    container.style.top = "0";
+
+    // 2. Build a real HTML Table element (Excel's preferred format)
+    // We add inline styles to ensure font size 11pt carries over to Excel
+    let tableHtml = `<table border="1" style="border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 11pt;">
+        <thead>
+            <tr style="background-color: #f2f2f2;">
+                <th style="padding: 4px;">Day</th>
+                <th style="padding: 4px;">Batch 1 Product</th><th style="padding: 4px;">Batch 1 Units</th>
+                <th style="padding: 4px;">Batch 2 Product</th><th style="padding: 4px;">Batch 2 Units</th>
+                <th style="padding: 4px;">Batch 3 Product</th><th style="padding: 4px;">Batch 3 Units</th>
+                <th style="padding: 4px; background:#ddd;">Daily Time</th>
+                <th style="padding: 4px; background:#ddd;">Daily Cost</th>
+            </tr>
+        </thead>
+        <tbody>`;
+
+    res.schedule.forEach(d => {
+        tableHtml += `<tr><td style="padding: 4px;">${DAYS[d.day]}</td>`;
+        for (let i = 0; i < 3; i++) {
+            const event = d.events[i];
+            if (event) {
+                tableHtml += `<td style="padding: 4px;">${PRODUCTS[event.p]}</td><td style="padding: 4px;">${event.amount}</td>`;
+            } else {
+                tableHtml += `<td style="padding: 4px; color: #ccc;">-</td><td style="padding: 4px; color: #ccc;">-</td>`;
+            }
+        }
+        tableHtml += `<td style="padding: 4px; background:#eee; font-weight:bold;">${d.dailyTime}m</td>`;
+        tableHtml += `<td style="padding: 4px; background:#eee; font-weight:bold;">$${d.dailyCost}</td>`;
+        tableHtml += "</tr>";
+    });
+
+    tableHtml += "</tbody></table>";
+    container.innerHTML = tableHtml;
+    document.body.appendChild(container);
+
+    // 3. Select the table content
+    const range = document.createRange();
+    range.selectNode(container);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // 4. Execute Copy
+    let success = false;
+    try {
+        success = document.execCommand("copy");
+    } catch (err) {
+        console.error("Copy command failed", err);
+    }
+
+    // 5. Cleanup
+    selection.removeAllRanges();
+    document.body.removeChild(container);
+
+    if (success) {
+        const originalText = btn.textContent;
+        btn.textContent = "Copied!";
+        btn.style.background = "#27ae60";
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.background = "";
+        }, 2000);
+    } else {
+        alert("Unable to copy automatically. Please try selecting the table manually.");
+    }
 }
 
 // --- Dashboard Logic ---
@@ -604,60 +759,176 @@ function renderDashboard() {
     const line = document.getElementById('dashLine').value; // L1 or L2
     const types = ['time', 'cost', 'combined', 'lostSales'];
     const typeLabels = { time: 'Min Time', cost: 'Min Cost', combined: 'Combined', lostSales: 'Min Lost Sales' };
+    const typeColors = { time: '#3498db', cost: '#e74c3c', combined: '#9b59b6', lostSales: '#f1c40f' };
+    const productColors = ['#2ecc71', '#3498db', '#9b59b6', '#f1c40f', '#e67e22'];
 
-    // 1. Comparison Chart
-    const chartContainer = document.getElementById('comparisonChart');
-    let chartHtml = '';
+    // Helper to destroy existing chart
+    const resetChart = (id) => {
+        if (chartInstances[id]) { chartInstances[id].destroy(); }
+    };
 
-    // Find max values for normalization
-    let maxTime = 0, maxCost = 0, maxLost = 0;
-    types.forEach(t => {
-        const res = state.lastResults[t][line];
-        if (res.totalTime > maxTime) maxTime = res.totalTime;
-        if (res.totalCost > maxCost) maxCost = res.totalCost;
-        if (res.totalLostSales > maxLost) maxLost = res.totalLostSales;
+    // 1. Daily Transition Time Comparison (Line Graph)
+    resetChart('timeLineChart');
+    const timeDatasets = types.map(t => ({
+        label: typeLabels[t],
+        data: state.lastResults[t][line].schedule.map(d => d.dailyTime),
+        borderColor: typeColors[t],
+        backgroundColor: typeColors[t] + '22',
+        tension: 0.3,
+        fill: false
+    }));
+
+    chartInstances['timeLineChart'] = new Chart(document.getElementById('timeLineChart'), {
+        type: 'line',
+        data: { labels: DAYS, datasets: timeDatasets },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
     });
 
-    types.forEach(t => {
-        const res = state.lastResults[t][line];
+    // 2. Daily Transition Cost Comparison (Line Graph)
+    resetChart('costLineChart');
+    const costDatasets = types.map(t => ({
+        label: typeLabels[t],
+        data: state.lastResults[t][line].schedule.map(d => d.dailyCost),
+        borderColor: typeColors[t],
+        backgroundColor: typeColors[t] + '22',
+        tension: 0.3,
+        fill: false
+    }));
 
-        // Calculate heights (percentage)
-        const hTime = maxTime ? (res.totalTime / maxTime) * 100 : 0;
-        const hCost = maxCost ? (res.totalCost / maxCost) * 100 : 0;
-        const hLost = maxLost ? (res.totalLostSales / maxLost) * 100 : 0;
+    chartInstances['costLineChart'] = new Chart(document.getElementById('costLineChart'), {
+        type: 'line',
+        data: { labels: DAYS, datasets: costDatasets },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
+    });
 
-        chartHtml += `
-            <div class="chart-group">
-                <div class="chart-bars">
-                    <div class="bar time" style="height: ${Math.max(hTime, 5)}%" data-value="Time: ${res.totalTime}m"></div>
-                    <div class="bar cost" style="height: ${Math.max(hCost, 5)}%" data-value="Cost: $${res.totalCost}"></div>
-                    <div class="bar lost" style="height: ${Math.max(hLost, 5)}%" data-value="Lost: ${res.totalLostSales}"></div>
-                </div>
-                <div class="chart-label">${typeLabels[t]}</div>
-            </div>
+    // 3. Inventory Buildup (Stacked Area) - For current selected optimization goal
+    const activeGoal = document.getElementById('optGoal').value || 'combined';
+    const schedule = state.lastResults[activeGoal][line].schedule;
+
+    resetChart('inventoryAreaChart');
+    const invDatasets = PRODUCTS.map((pName, pIdx) => ({
+        label: pName,
+        data: schedule.map(d => d.inventory[pIdx]),
+        borderColor: productColors[pIdx],
+        backgroundColor: productColors[pIdx] + '66',
+        fill: true,
+        tension: 0.2
+    }));
+
+    chartInstances['inventoryAreaChart'] = new Chart(document.getElementById('inventoryAreaChart'), {
+        type: 'line',
+        data: { labels: DAYS, datasets: invDatasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { stacked: true, title: { display: true, text: 'Stock' } } },
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }
+        }
+    });
+
+    // 4. Lost Sales per Product (Grouped Bar)
+    resetChart('lostSalesBarChart');
+    const lsDatasets = PRODUCTS.map((pName, pIdx) => ({
+        label: pName,
+        data: schedule.map(d => d.lostSales[pIdx]),
+        backgroundColor: productColors[pIdx],
+        borderRadius: 4
+    }));
+
+    chartInstances['lostSalesBarChart'] = new Chart(document.getElementById('lostSalesBarChart'), {
+        type: 'bar',
+        data: { labels: DAYS, datasets: lsDatasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true, title: { display: true, text: 'Lost' } } },
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }
+        }
+    });
+
+    // 5. Daily Demand per Product (Line Graph)
+    const demandMatrix = line === 'L1' ? state.demandL1 : state.demandL2;
+    resetChart('demandLineChart');
+    const demandDatasets = PRODUCTS.map((pName, pIdx) => ({
+        label: pName,
+        data: DAYS.map((_, dIdx) => demandMatrix[dIdx][pIdx]),
+        borderColor: productColors[pIdx],
+        backgroundColor: productColors[pIdx] + '22',
+        tension: 0.3,
+        fill: false
+    }));
+
+    chartInstances['demandLineChart'] = new Chart(document.getElementById('demandLineChart'), {
+        type: 'line',
+        data: { labels: DAYS, datasets: demandDatasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true, title: { display: true, text: 'Units' } } },
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }
+        }
+    });
+
+    // Render Summary Table
+    renderProductSummary(line, activeGoal);
+}
+
+function renderProductSummary(line, activeGoal) {
+    const container = document.getElementById('productSummaryContainer');
+    if (!state.lastResults) return;
+
+    const res = state.lastResults[activeGoal][line];
+    const demandMatrix = line === 'L1' ? state.demandL1 : state.demandL2;
+
+    let html = `
+        <table class="result-table">
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    <th>Total Demand</th>
+                    <th>Total Produced</th>
+                    <th>Total Lost Sales</th>
+                    <th>Service Level</th>
+                    <th>Avg. Inventory</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    PRODUCTS.forEach((pName, pIdx) => {
+        let totalDemand = 0;
+        for (let d = 0; d < 7; d++) totalDemand += demandMatrix[d][pIdx];
+
+        let totalProduced = 0;
+        res.schedule.forEach(day => {
+            day.events.forEach(ev => {
+                if (ev.p === pIdx) totalProduced += ev.amount;
+            });
+        });
+
+        let totalLost = 0;
+        res.schedule.forEach(day => totalLost += day.lostSales[pIdx]);
+
+        let totalInv = 0;
+        res.schedule.forEach(day => totalInv += day.inventory[pIdx]);
+        const avgInv = (totalInv / 7).toFixed(1);
+
+        const serviceLevel = totalDemand > 0 ? (((totalDemand - totalLost) / totalDemand) * 100).toFixed(1) : '100.0';
+
+        html += `
+            <tr>
+                <td><strong>${pName}</strong></td>
+                <td>${totalDemand}</td>
+                <td>${totalProduced}</td>
+                <td>${totalLost}</td>
+                <td><span class="badge ${serviceLevel > 95 ? 'success' : 'warning'}">${serviceLevel}%</span></td>
+                <td>${avgInv}</td>
+            </tr>
         `;
     });
 
-    // Add Legend
-    chartContainer.innerHTML = `
-        <div style="width:100%; display:flex; flex-direction:column; align-items:center;">
-            <div class="legend">
-                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Time</div>
-                <div class="legend-item"><div class="dot" style="background:#e74c3c"></div> Cost</div>
-                <div class="legend-item"><div class="dot" style="background:#f1c40f"></div> Lost Sales</div>
-            </div>
-            <div style="display:flex; width:100%; justify-content:space-around; align-items:flex-end; height:100%;">
-                ${chartHtml}
-            </div>
-        </div>
-    `;
-
-    // 2. Inventory & Lost Sales Tables
-    const currentOpt = document.getElementById('optGoal').value || 'combined';
-    const currentRes = state.lastResults[currentOpt][line];
-
-    renderDataTable('dashInventory', currentRes.schedule, 'inventory', `Inventory Levels (${typeLabels[currentOpt]})`);
-    renderDataTable('dashLostSales', currentRes.schedule, 'lostSales', `Lost Sales (${typeLabels[currentOpt]})`);
+    html += `</tbody></table>`;
+    container.innerHTML = html;
 }
 
 function renderDataTable(containerId, schedule, key, title) {
