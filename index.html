@@ -38,8 +38,8 @@
                         <h3>Global Parameters</h3>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Daily Capacity (Units Produced)</label>
-                                <input type="number" id="dailyCapacity" value="1000">
+                                <label>Daily Capacity (Mins)</label>
+                                <input type="number" id="dailyCapacity" value="480">
                             </div>
                             <div class="form-group">
                                 <label>Max Batch Size</label>
@@ -51,16 +51,6 @@
                                     title="Fixed Constraint">
                             </div>
                         </div>
-                        <div class="form-row" style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-                            <div class="form-group">
-                                <label>Penalty Weight (%)</label>
-                                <input type="number" id="penaltyWeight" value="50" min="0" max="100">
-                            </div>
-                            <div class="form-group">
-                                <label>Cost Weight (%)</label>
-                                <input type="number" id="costWeight" value="50" min="0" max="100">
-                            </div>
-                        </div>
                     </div>
 
                     <!-- Transition Matrices -->
@@ -68,7 +58,7 @@
                         <h3>Transition Settings (From Row -> To Col)</h3>
                         <div class="split-tables">
                             <div class="table-wrapper">
-                                <h4>Transit Time (min)</h4>
+                                <h4>Transition Time (Mins)</h4>
                                 <div id="transTimeContainer" class="spreadsheet-grid"></div>
                             </div>
                             <div class="table-wrapper">
@@ -106,7 +96,7 @@
                         <select id="optGoal" onchange="renderCurrentResults()">
                             <option value="time">Minimum Transit Time</option>
                             <option value="cost">Minimum Transit Cost</option>
-                            <option value="combined">Combined Min Transit Time & Cost</option>
+                            <option value="combined">Combined Min Time & Cost</option>
                             <option value="lostSales">Minimum Lost Sales</option>
                         </select>
                     </div>
@@ -135,30 +125,22 @@
                 <div class="erp-grid">
                     <!-- Comparison Chart -->
                     <div class="card full-width">
-                        <h3>Optimization Strategy Comparison (Total for Line)</h3>
+                        <h3>Optimization Strategy Comparison (Total for Selected Line)</h3>
                         <div id="comparisonChart" class="chart-container">
                             <!-- Dynamic Bar Charts will go here -->
                         </div>
                     </div>
 
-                    <!-- Line 1 Data -->
-                    <div class="card">
-                        <h3>Line 1: Daily Inventory Levels</h3>
-                        <div id="dashInventoryL1" class="table-wrapper"></div>
-                    </div>
-                    <div class="card">
-                        <h3>Line 1: Daily Lost Sales</h3>
-                        <div id="dashLostSalesL1" class="table-wrapper"></div>
+                    <!-- Inventory Table -->
+                    <div class="card full-width">
+                        <h3>Daily Inventory Levels (End of Day)</h3>
+                        <div id="dashInventory" class="table-wrapper"></div>
                     </div>
 
-                    <!-- Line 2 Data -->
-                    <div class="card">
-                        <h3>Line 2: Daily Inventory Levels</h3>
-                        <div id="dashInventoryL2" class="table-wrapper"></div>
-                    </div>
-                    <div class="card">
-                        <h3>Line 2: Daily Lost Sales</h3>
-                        <div id="dashLostSalesL2" class="table-wrapper"></div>
+                    <!-- Lost Sales Table -->
+                    <div class="card full-width">
+                        <h3>Daily Lost Sales</h3>
+                        <div id="dashLostSales" class="table-wrapper"></div>
                     </div>
                 </div>
             </div>

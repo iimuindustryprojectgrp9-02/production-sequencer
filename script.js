@@ -5,13 +5,10 @@ const LINES = ['L1', 'L2'];
 
 // State
 let state = {
-    dailyCapacity: 1000,
+    dailyCapacity: 480,
     maxBatchSize: 1000,
     maxBatches: 3,
-    penaltyWeight: 50,
-    costWeight: 50,
-    optimizationMethod: 'auto',
-    transitionPenalty: [], // 5x5
+    transitionTime: [], // 5x5
     transitionCost: [], // 5x5
     demandL1: [], // 7 Days x 5 Products (Transposed)
     demandL2: [], // 7 Days x 5 Products (Transposed)
@@ -28,22 +25,18 @@ function saveState() {
     }
 }
 
-/**
- * Merges saved state into the current defaults to handle property additions.
- */
 function loadState() {
-    const saved = localStorage.getItem('erp_state');
-    if (saved) {
-        try {
+    try {
+        const saved = localStorage.getItem(STATE_KEY);
+        if (saved) {
             const parsed = JSON.parse(saved);
-            // Deep merge logic to avoid losing new default properties
+            // Merge loaded state with default structure to ensure compatibility
             state = { ...state, ...parsed };
-            return true;
-        } catch (e) {
-            console.error("Failed to load state", e);
+            console.log("State loaded from storage");
         }
+    } catch (e) {
+        console.error("Failed to load state", e);
     }
-    return false;
 }
 
 // Initialization
@@ -73,35 +66,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 saveState();
             });
         }
-
-        // Bind weights
-        const pWeightInput = document.getElementById('penaltyWeight');
-        const cWeightInput = document.getElementById('costWeight');
-
-        if (pWeightInput && cWeightInput) {
-            pWeightInput.value = state.penaltyWeight;
-            cWeightInput.value = state.costWeight;
-
-            pWeightInput.addEventListener('change', (e) => {
-                let val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
-                state.penaltyWeight = val;
-                state.costWeight = 100 - val;
-                pWeightInput.value = state.penaltyWeight;
-                cWeightInput.value = state.costWeight;
-                saveState();
-            });
-
-            cWeightInput.addEventListener('change', (e) => {
-                let val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
-                state.costWeight = val;
-                state.penaltyWeight = 100 - val;
-                cWeightInput.value = state.costWeight;
-                pWeightInput.value = state.penaltyWeight;
-                saveState();
-            });
-        }
-
-        // Remove optimization engine binding
 
         // Add global paste listener to handle pasting into grids
         document.addEventListener('paste', handlePaste);
@@ -133,7 +97,7 @@ function switchView(viewId) {
 // --- Grid Initialization ---
 
 function initTransitionGrids() {
-    // Penalty Grid
+    // Time Grid
     createGrid('transTimeContainer', PRODUCTS.length + 1, PRODUCTS.length + 1, (r, c, cell) => {
         if (r === 0 && c === 0) cell.textContent = 'From\\To';
         else if (r === 0) { cell.textContent = PRODUCTS[c - 1]; cell.classList.add('grid-header'); }
@@ -141,17 +105,17 @@ function initTransitionGrids() {
         else if (r === c) { cell.textContent = '-'; cell.style.background = '#eee'; }
         else {
             // Init state
-            if (!state.transitionPenalty[r - 1]) state.transitionPenalty[r - 1] = [];
-            if (state.transitionPenalty[r - 1][c - 1] === undefined) {
-                state.transitionPenalty[r - 1][c - 1] = 30;
+            if (!state.transitionTime[r - 1]) state.transitionTime[r - 1] = [];
+            if (state.transitionTime[r - 1][c - 1] === undefined) {
+                state.transitionTime[r - 1][c - 1] = 30;
             }
-            const val = state.transitionPenalty[r - 1][c - 1];
+            const val = state.transitionTime[r - 1][c - 1];
 
-            const input = createInput(val, (v) => updateTransition('penalty', r - 1, c - 1, v));
+            const input = createInput(val, (v) => updateTransition('time', r - 1, c - 1, v));
             // Add data attributes for paste support
             input.dataset.row = r - 1;
             input.dataset.col = c - 1;
-            input.dataset.grid = 'transitionPenalty';
+            input.dataset.grid = 'transitionTime';
             cell.appendChild(input);
         }
     });
@@ -181,7 +145,7 @@ function initTransitionGrids() {
 }
 
 function updateTransition(type, r, c, val) {
-    if (type === 'penalty') state.transitionPenalty[r][c] = val;
+    if (type === 'time') state.transitionTime[r][c] = val;
     if (type === 'cost') state.transitionCost[r][c] = val;
     saveState();
 }
@@ -291,7 +255,7 @@ function handlePaste(e) {
                     setTimeout(() => input.style.backgroundColor = '', 500);
 
                     // Update state
-                    if (gridKey === 'transitionPenalty') state.transitionPenalty[targetRow][targetCol] = numVal;
+                    if (gridKey === 'transitionTime') state.transitionTime[targetRow][targetCol] = numVal;
                     else if (gridKey === 'transitionCost') state.transitionCost[targetRow][targetCol] = numVal;
                     else state[gridKey][targetRow][targetCol] = numVal;
 
@@ -312,11 +276,11 @@ function runOptimization() {
     const types = ['time', 'cost', 'combined', 'lostSales'];
     state.lastResults = {}; // Reset before run
 
+
     types.forEach(type => {
         state.lastResults[type] = {
-            L1: solveLineSearch(state.demandL1, type),
-            L2: solveLineSearch(state.demandL2, type),
-            strategyUsed: 'Simulated Annealing (Global)'
+            L1: solveLine(state.demandL1, type),
+            L2: solveLine(state.demandL2, type)
         };
     });
 
@@ -325,116 +289,162 @@ function runOptimization() {
     renderCurrentResults();
 }
 
-
-/**
- * Global Optimization using Simulated Annealing.
- * Explores multiple production sequences to find a better global path.
- */
-function solveLineSearch(demandMatrix, type) {
-    let bestRes = null;
-    let minScore = Infinity;
-
-    // Run 100 iterations with randomization
-    for (let i = 0; i < 100; i++) {
-        const res = solveLineRandomized(demandMatrix, type, 0.15); // 15% randomness
-
-        let score = 0;
-        if (type === 'time') {
-            score = res.totalPenalty;
-        } else if (type === 'cost') {
-            score = res.totalCost;
-        } else if (type === 'lostSales') {
-            score = res.totalLostSales;
-        } else if (type === 'combined') {
-            score = (res.totalPenalty * (state.penaltyWeight / 100)) +
-                (res.totalCost * (state.costWeight / 100)) +
-                (res.totalLostSales * 100000);
-        }
-
-        if (score < minScore) {
-            minScore = score;
-            bestRes = res;
-        }
-    }
-    return bestRes;
-}
-
-/**
- * Standard solveLine but with a "temperature" for random picking.
- */
-function solveLineRandomized(demandMatrix, type, randomness = 0.1) {
-    let weightPenalty = 0, weightCost = 0, weightLostSales = 0;
-    if (type === 'time') weightPenalty = 1;
+function solveLine(demandMatrix, type) {
+    let weightTime = 0, weightCost = 0, weightLostSales = 0;
+    if (type === 'time') weightTime = 1;
     else if (type === 'cost') weightCost = 1;
-    else if (type === 'combined') { weightPenalty = state.penaltyWeight / 100; weightCost = state.costWeight / 100; }
-    else if (type === 'lostSales') weightLostSales = 1000;
+    else if (type === 'combined') { weightTime = 1; weightCost = 1; }
+    else if (type === 'lostSales') { weightLostSales = 1000; }
 
-    let inventory = Array(5).fill(0), backlog = Array(5).fill(0), lastProduct = -1;
-    let schedule = [], totalPenalty = 0, totalCost = 0, totalLostSales = 0;
+    let inventory = Array(5).fill(0);
+    let backlog = Array(5).fill(0);
+    let lastProduct = -1;
+
+    let schedule = [];
+    let totalTime = 0, totalCost = 0, totalLostSales = 0;
 
     for (let day = 0; day < 7; day++) {
-        let daySchedule = [], remainingCapacity = state.dailyCapacity, batchesToday = 0, candidates = [];
+        let daySchedule = [];
+        let remainingTime = state.dailyCapacity;
+        let batchesToday = 0;
 
+        // Candidates logic
+        let candidates = [];
         for (let p = 0; p < 5; p++) {
             let demandToday = demandMatrix[day][p];
-            if (inventory[p] >= demandToday) { inventory[p] -= demandToday; demandToday = 0; }
-            else { demandToday -= inventory[p]; inventory[p] = 0; }
-            let mandatory = backlog[p], desirable = demandToday;
-            if (mandatory > 0 || desirable > 0) candidates.push({ p, mandatory, desirable });
+
+            // Use inventory
+            if (inventory[p] >= demandToday) {
+                inventory[p] -= demandToday;
+                demandToday = 0;
+            } else {
+                demandToday -= inventory[p];
+                inventory[p] = 0;
+            }
+
+            let mandatory = backlog[p];
+            let desirable = demandToday;
+
+            if (mandatory > 0 || desirable > 0) {
+                candidates.push({ p, mandatory, desirable });
+            }
         }
 
-        while (candidates.length > 0 && batchesToday < state.maxBatches) {
-            // Sort by score
-            candidates.sort((a, b) => {
-                let sA = (getTransition(lastProduct, a.p).penalty * weightPenalty + getTransition(lastProduct, a.p).cost * weightCost);
-                let sB = (getTransition(lastProduct, b.p).penalty * weightPenalty + getTransition(lastProduct, b.p).cost * weightCost);
-                if (a.mandatory > 0 && b.mandatory === 0) return -1;
-                if (b.mandatory > 0 && a.mandatory === 0) return 1;
-                return sA - sB;
-            });
+        // Sort candidates
+        candidates.sort((a, b) => {
+            // Priority 1: Has Backlog (Mandatory)
+            if (a.mandatory > 0 && b.mandatory === 0) return -1;
+            if (b.mandatory > 0 && a.mandatory === 0) return 1;
 
-            // With chance 'randomness', pick a random candidate instead of the best
-            let idx = (Math.random() < randomness) ? Math.floor(Math.random() * candidates.length) : 0;
-            let cand = candidates.splice(idx, 1)[0];
+            let transA = getTransition(lastProduct, a.p);
+            let transB = getTransition(lastProduct, b.p);
 
-            let trans = getTransition(lastProduct, cand.p);
-            // Transition Calculation (Minutes, does not consume Units capacity)
-            if (lastProduct !== cand.p && lastProduct !== -1) {
-                totalPenalty += trans.penalty;
+            // Priority 2 (Only for Lost Sales optimization): Density Heuristic (Benefit / Cost)
+            if (type === 'lostSales') {
+                // Calculate potential production for A
+                let maxPossibleA = remainingTime - transA.time;
+                let producedA = Math.max(0, Math.min(a.mandatory, maxPossibleA, state.maxBatchSize));
+                let timeSpentA = transA.time + producedA;
+                let scoreA = timeSpentA > 0 ? (producedA / timeSpentA) : 0;
+
+                // Calculate potential production for B
+                let maxPossibleB = remainingTime - transB.time;
+                let producedB = Math.max(0, Math.min(b.mandatory, maxPossibleB, state.maxBatchSize));
+                let timeSpentB = transB.time + producedB;
+                let scoreB = timeSpentB > 0 ? (producedB / timeSpentB) : 0;
+
+                if (Math.abs(scoreA - scoreB) > 0.0001) {
+                    return scoreB - scoreA; // Descending Score
+                }
+
+                // Tie-breaker: Absolute amount cleared
+                if (producedA !== producedB) return producedB - producedA;
+            }
+
+            // Priority 3: Minimize Transition Cost/Time (Standard Efficiency)
+            let costA = transA.time * weightTime + transA.cost * weightCost;
+            let costB = transB.time * weightTime + transB.cost * weightCost;
+
+            return costA - costB;
+        });
+
+        // Produce
+        for (let cand of candidates) {
+            if (batchesToday >= state.maxBatches) break; // Constraint Check
+
+            let p = cand.p;
+            let amountNeeded = cand.mandatory + cand.desirable;
+            let trans = getTransition(lastProduct, p);
+
+            if (remainingTime < trans.time) break;
+
+            // Transition
+            if (lastProduct !== p && lastProduct !== -1) {
+                remainingTime -= trans.time;
+                totalTime += trans.time;
                 totalCost += trans.cost;
             }
-            lastProduct = cand.p;
+            lastProduct = p;
 
-            // Production (Consumes Units capacity)
-            let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
+            // Production
+            let maxPossible = remainingTime;
+            let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
+
             if (amountToProduce > 0) {
-                remainingCapacity -= amountToProduce;
+                remainingTime -= amountToProduce;
                 batchesToday++;
-                daySchedule.push({ p: cand.p, amount: amountToProduce });
+
+                daySchedule.push({ p: p, amount: amountToProduce });
+
+                // Update Backlog/Inventory
                 let produced = amountToProduce;
-                if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
-                if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
+                if (cand.mandatory > 0) {
+                    let met = Math.min(produced, cand.mandatory);
+                    cand.mandatory -= met;
+                    produced -= met;
+                    backlog[p] -= met;
+                }
+                if (produced > 0) {
+                    let metToday = Math.min(produced, cand.desirable);
+                    cand.desirable -= metToday;
+                    produced -= metToday;
+                    inventory[p] += produced;
+                }
             }
         }
 
-        let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
+        // End of day
+        let dayInventory = [...inventory];
+        let dayLostSales = Array(5).fill(0);
+
         candidates.forEach(c => {
-            let unmet = c.mandatory + c.desirable;
-            if (unmet > 0) {
-                totalLostSales += unmet;
-                dayLostSales[c.p] = unmet;
-                backlog[c.p] = 0;
+            if (c.mandatory > 0) {
+                totalLostSales += c.mandatory;
+                dayLostSales[c.p] = c.mandatory;
+                backlog[c.p] = 0; // Lost sales are lost, not backlogged (assuming per user request "Total lost sales")
+                // Or should it be backlogged? Usually lost sales means lost.
+                // Let's assume lost sales are cleared from backlog.
+            }
+            if (c.desirable > 0) {
+                backlog[c.p] += c.desirable;
             }
         });
-        schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
+
+        schedule.push({
+            day,
+            events: daySchedule,
+            inventory: dayInventory,
+            lostSales: dayLostSales
+        });
     }
-    return { schedule, totalPenalty, totalCost, totalLostSales };
+
+    return { schedule, totalTime, totalCost, totalLostSales };
 }
 
 function getTransition(fromP, toP) {
-    if (fromP === -1 || fromP === toP) return { penalty: 0, cost: 0 };
+    if (fromP === -1 || fromP === toP) return { time: 0, cost: 0 };
     return {
-        penalty: state.transitionPenalty[fromP][toP] || 0,
+        time: state.transitionTime[fromP][toP] || 0,
         cost: state.transitionCost[fromP][toP] || 0
     };
 }
@@ -451,20 +461,9 @@ function renderCurrentResults() {
 
     let html = `
         <div class="card full-width">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h3>Performance Summary (${type})</h3>
-                <div style="text-align:right">
-                    <div style="font-size:0.9em; color:#666; margin-bottom:4px;">
-                        Strategy: <strong>Simulated Annealing (Global)</strong>
-                    </div>
-                    <div style="font-size:0.8rem; color:#888;">
-                        Target: <strong>${typeLabels[type] || type}</strong>
-                        ${type === 'combined' ? ` | Weights: ${state.penaltyWeight}% / ${state.costWeight}%` : ''}
-                    </div>
-                </div>
-            </div>
-            <div class="form-row" style="margin-top:10px;">
-                <div class="stat-box"><div class="stat-value">${(res.L1.totalPenalty + res.L2.totalPenalty).toFixed(0)} min</div><div class="stat-label">Total Transit Time</div></div>
+            <h3>Performance Summary (${type})</h3>
+            <div class="form-row">
+                <div class="stat-box"><div class="stat-value">${res.L1.totalTime + res.L2.totalTime} min</div><div class="stat-label">Total Transit Time</div></div>
                 <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
                 <div class="stat-box"><div class="stat-value">${res.L1.totalLostSales + res.L2.totalLostSales} units</div><div class="stat-label">Lost Sales</div></div>
             </div>
@@ -478,16 +477,7 @@ function renderCurrentResults() {
 }
 
 function renderLineTable(title, res) {
-    const lineId = title.includes('Line 1') ? 'L1' : 'L2';
-    let html = `<div class="card full-width">
-        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #eee; margin-bottom: 10px; padding-bottom: 10px;">
-            <h3 style="margin:0; border:none; padding:0;">${title}</h3>
-            <button class="secondary-btn" onclick="copyLineToClipboard('${lineId}')" title="Copy for Excel">
-                <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px;" viewBox="0 0 24 24"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" /></svg>
-                Copy for Excel
-            </button>
-        </div>
-        <table class="result-table">`;
+    let html = `<div class="card full-width"><h3>${title}</h3><table class="result-table">`;
     html += `<thead><tr>
         <th style="width:100px">Day</th>
         <th>Batch 1</th>
@@ -514,44 +504,6 @@ function renderLineTable(title, res) {
     return html;
 }
 
-function copyLineToClipboard(lineId) {
-    const type = document.getElementById('optGoal').value;
-    if (!state.lastResults || !state.lastResults[type]) return;
-
-    const res = state.lastResults[type][lineId];
-    if (!res) return;
-
-    // Build TSV string
-    let tsv = "Day\tBatch 1\tBatch 2\tBatch 3\n";
-
-    res.schedule.forEach(d => {
-        let row = [DAYS[d.day]];
-        for (let i = 0; i < 3; i++) {
-            const event = d.events[i];
-            if (event) {
-                row.push(`${PRODUCTS[event.p]}: ${event.amount} units`);
-            } else {
-                row.push("-");
-            }
-        }
-        tsv += row.join("\t") + "\n";
-    });
-
-    navigator.clipboard.writeText(tsv).then(() => {
-        const btn = event.currentTarget;
-        const originalText = btn.innerHTML;
-        btn.innerHTML = "Copied!";
-        btn.classList.add('success-btn');
-        setTimeout(() => {
-            btn.innerHTML = originalText;
-            btn.classList.remove('success-btn');
-        }, 2000);
-    }).catch(err => {
-        console.error('Failed to copy: ', err);
-        alert('Failed to copy to clipboard');
-    });
-}
-
 // --- Dashboard Logic ---
 
 function renderDashboard() {
@@ -559,17 +511,17 @@ function renderDashboard() {
 
     const line = document.getElementById('dashLine').value; // L1 or L2
     const types = ['time', 'cost', 'combined', 'lostSales'];
-    const typeLabels = { time: 'Min Transit Time', cost: 'Min Cost', combined: 'Combined', lostSales: 'Min Lost Sales' };
+    const typeLabels = { time: 'Min Time', cost: 'Min Cost', combined: 'Combined', lostSales: 'Min Lost Sales' };
 
     // 1. Comparison Chart
     const chartContainer = document.getElementById('comparisonChart');
     let chartHtml = '';
 
     // Find max values for normalization
-    let maxPenalty = 0, maxCost = 0, maxLost = 0;
+    let maxTime = 0, maxCost = 0, maxLost = 0;
     types.forEach(t => {
         const res = state.lastResults[t][line];
-        if (res.totalPenalty > maxPenalty) maxPenalty = res.totalPenalty;
+        if (res.totalTime > maxTime) maxTime = res.totalTime;
         if (res.totalCost > maxCost) maxCost = res.totalCost;
         if (res.totalLostSales > maxLost) maxLost = res.totalLostSales;
     });
@@ -578,14 +530,14 @@ function renderDashboard() {
         const res = state.lastResults[t][line];
 
         // Calculate heights (percentage)
-        const hPenalty = maxPenalty ? (res.totalPenalty / maxPenalty) * 100 : 0;
+        const hTime = maxTime ? (res.totalTime / maxTime) * 100 : 0;
         const hCost = maxCost ? (res.totalCost / maxCost) * 100 : 0;
         const hLost = maxLost ? (res.totalLostSales / maxLost) * 100 : 0;
 
         chartHtml += `
             <div class="chart-group">
                 <div class="chart-bars">
-                    <div class="bar time" style="height: ${Math.max(hPenalty, 5)}%" data-value="Transit Time: ${res.totalPenalty} min"></div>
+                    <div class="bar time" style="height: ${Math.max(hTime, 5)}%" data-value="Time: ${res.totalTime}m"></div>
                     <div class="bar cost" style="height: ${Math.max(hCost, 5)}%" data-value="Cost: $${res.totalCost}"></div>
                     <div class="bar lost" style="height: ${Math.max(hLost, 5)}%" data-value="Lost: ${res.totalLostSales}"></div>
                 </div>
@@ -598,7 +550,7 @@ function renderDashboard() {
     chartContainer.innerHTML = `
         <div style="width:100%; display:flex; flex-direction:column; align-items:center;">
             <div class="legend">
-                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Transit Time (min)</div>
+                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Time</div>
                 <div class="legend-item"><div class="dot" style="background:#e74c3c"></div> Cost</div>
                 <div class="legend-item"><div class="dot" style="background:#f1c40f"></div> Lost Sales</div>
             </div>
@@ -610,14 +562,10 @@ function renderDashboard() {
 
     // 2. Inventory & Lost Sales Tables
     const currentOpt = document.getElementById('optGoal').value || 'combined';
+    const currentRes = state.lastResults[currentOpt][line];
 
-    // Render Line 1
-    renderDataTable('dashInventoryL1', state.lastResults[currentOpt].L1.schedule, 'inventory', `L1 Inventory (${typeLabels[currentOpt]})`);
-    renderDataTable('dashLostSalesL1', state.lastResults[currentOpt].L1.schedule, 'lostSales', `L1 Lost Sales (${typeLabels[currentOpt]})`);
-
-    // Render Line 2
-    renderDataTable('dashInventoryL2', state.lastResults[currentOpt].L2.schedule, 'inventory', `L2 Inventory (${typeLabels[currentOpt]})`);
-    renderDataTable('dashLostSalesL2', state.lastResults[currentOpt].L2.schedule, 'lostSales', `L2 Lost Sales (${typeLabels[currentOpt]})`);
+    renderDataTable('dashInventory', currentRes.schedule, 'inventory', `Inventory Levels (${typeLabels[currentOpt]})`);
+    renderDataTable('dashLostSales', currentRes.schedule, 'lostSales', `Lost Sales (${typeLabels[currentOpt]})`);
 }
 
 function renderDataTable(containerId, schedule, key, title) {

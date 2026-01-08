@@ -2,42 +2,53 @@
 // Mock State
 const PRODUCTS = ['P1', 'P2', 'P3', 'P4', 'P5'];
 let state = {
-    dailyCapacity: 1000,
+    dailyCapacity: 480,
     maxBatchSize: 1000,
     maxBatches: 3,
-    penaltyWeight: 80,
-    costWeight: 20,
-    transitionPenalty: Array(5).fill().map(() => Array(5).fill(30)),
+    transitionTime: Array(5).fill().map(() => Array(5).fill(30)),
     transitionCost: Array(5).fill().map(() => Array(5).fill(100)),
     demandL1: Array(7).fill().map(() => Array(5).fill(100)), // High demand
     demandL2: Array(7).fill().map(() => Array(5).fill(100))
 };
 
-// ... (rest of the file logic remains same, just ensure solveLine handles combined)
-function solveLine(demandMatrix, type) {
-    let weightPenalty = 0, weightCost = 0, weightLostSales = 0;
-    if (type === 'time') {
-        weightPenalty = 1;
-    } else if (type === 'cost') {
-        weightCost = 1;
-    } else if (type === 'combined') {
-        weightPenalty = state.penaltyWeight / 100;
-        weightCost = state.costWeight / 100;
-    } else if (type === 'lostSales') {
-        weightLostSales = 1000;
+// Make transitions distinct to see effects
+// P1 is "far" from everyone else in time
+for (let i = 0; i < 5; i++) {
+    state.transitionTime[0][i] = 100; // From P1 to others is slow
+    state.transitionTime[i][0] = 100; // From others to P1 is slow
+}
+// P2-P5 are fast transitions (10)
+for (let i = 1; i < 5; i++) {
+    for (let j = 1; j < 5; j++) {
+        if (i !== j) state.transitionTime[i][j] = 10;
     }
-    // ...
+}
+
+function getTransition(fromP, toP) {
+    if (fromP === -1 || fromP === toP) return { time: 0, cost: 0 };
+    return {
+        time: state.transitionTime[fromP][toP] || 0,
+        cost: state.transitionCost[fromP][toP] || 0
+    };
+}
+
+function solveLine(demandMatrix, type) {
+    let weightTime = 0, weightCost = 0, weightLostSales = 0;
+    if (type === 'time') weightTime = 1;
+    else if (type === 'cost') weightCost = 1;
+    else if (type === 'combined') { weightTime = 1; weightCost = 1; }
+    else if (type === 'lostSales') weightLostSales = 1000;
 
     let inventory = Array(5).fill(0);
     let backlog = Array(5).fill(0);
     let lastProduct = -1;
 
     let schedule = [];
-    let totalPenalty = 0, totalCost = 0, totalLostSales = 0;
+    let totalTime = 0, totalCost = 0, totalLostSales = 0;
 
     for (let day = 0; day < 7; day++) {
         let daySchedule = [];
-        let remainingCapacity = state.dailyCapacity;
+        let remainingTime = state.dailyCapacity;
         let batchesToday = 0;
 
         // Candidates logic
@@ -70,16 +81,16 @@ function solveLine(demandMatrix, type) {
             // Priority 2 (Only for Lost Sales optimization): Density Heuristic (Benefit / Cost)
             if (type === 'lostSales') {
                 // Calculate potential production for A
-                let maxPossibleA = remainingCapacity - transA.penalty;
+                let maxPossibleA = remainingTime - transA.time;
                 let producedA = Math.max(0, Math.min(a.mandatory, maxPossibleA, state.maxBatchSize));
-                let capacityUsedA = transA.penalty + producedA;
-                let scoreA = capacityUsedA > 0 ? (producedA / capacityUsedA) : 0;
+                let timeSpentA = transA.time + producedA;
+                let scoreA = timeSpentA > 0 ? (producedA / timeSpentA) : 0;
 
                 // Calculate potential production for B
-                let maxPossibleB = remainingCapacity - transB.penalty;
+                let maxPossibleB = remainingTime - transB.time;
                 let producedB = Math.max(0, Math.min(b.mandatory, maxPossibleB, state.maxBatchSize));
-                let capacityUsedB = transB.penalty + producedB;
-                let scoreB = capacityUsedB > 0 ? (producedB / capacityUsedB) : 0;
+                let timeSpentB = transB.time + producedB;
+                let scoreB = timeSpentB > 0 ? (producedB / timeSpentB) : 0;
 
                 if (Math.abs(scoreA - scoreB) > 0.0001) {
                     return scoreB - scoreA; // Descending Score
@@ -89,9 +100,9 @@ function solveLine(demandMatrix, type) {
                 if (producedA !== producedB) return producedB - producedA;
             }
 
-            // Priority 3: Minimize Transition Cost/Penalty (Standard Efficiency)
-            let costA = transA.penalty * weightPenalty + transA.cost * weightCost;
-            let costB = transB.penalty * weightPenalty + transB.cost * weightCost;
+            // Priority 3: Minimize Transition Cost/Time (Standard Efficiency)
+            let costA = transA.time * weightTime + transA.cost * weightCost;
+            let costB = transB.time * weightTime + transB.cost * weightCost;
 
             return costA - costB;
         });
@@ -103,21 +114,26 @@ function solveLine(demandMatrix, type) {
             let amountNeeded = cand.mandatory + cand.desirable;
             let trans = getTransition(lastProduct, p);
 
-            if (remainingCapacity < trans.penalty) break;
+            if (remainingTime < trans.time) break;
 
             if (lastProduct !== p && lastProduct !== -1) {
-                remainingCapacity -= trans.penalty;
-                totalPenalty += trans.penalty;
+                remainingTime -= trans.time;
+                totalTime += trans.time;
                 totalCost += trans.cost;
             }
             lastProduct = p;
 
-            let maxPossible = remainingCapacity;
+            let maxPossible = remainingTime; // 1 unit = 1 min (implicit?) No, code doesn't specify unit time. 
+            // Wait, original code:
+            // let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
+            // This implies 1 unit takes 1 minute of capacity?
+            // "maxPossible" is "remainingTime"
+            // Yes, unit production rate seems to be 1 unit/min.
 
             let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
 
             if (amountToProduce > 0) {
-                remainingCapacity -= amountToProduce;
+                remainingTime -= amountToProduce;
                 batchesToday++;
                 daySchedule.push({ p: p, amount: amountToProduce });
 
@@ -148,12 +164,18 @@ function solveLine(demandMatrix, type) {
             }
         });
     }
-    return { totalPenalty, totalCost, totalLostSales };
+    return { totalTime, totalCost, totalLostSales };
 }
 
 console.log("Running Sim...");
-const resPenalty = solveLine(state.demandL1, 'time');
-console.log(`Type: time (Min Penalty) | Lost: ${resPenalty.totalLostSales} | TransPenalty: ${resPenalty.totalPenalty}`);
+const resTime = solveLine(state.demandL1, 'time');
+console.log(`Type: time | Lost: ${resTime.totalLostSales} | TransTime: ${resTime.totalTime}`);
 
 const resLost = solveLine(state.demandL1, 'lostSales');
-console.log(`Type: lostSales | Lost: ${resLost.totalLostSales} | TransPenalty: ${resLost.totalPenalty}`);
+console.log(`Type: lostSales | Lost: ${resLost.totalLostSales} | TransTime: ${resLost.totalTime}`);
+
+if (resLost.totalLostSales > resTime.totalLostSales) {
+    console.log("CONFIRMED: Lost sales higher in lostSales mode.");
+} else {
+    console.log("NOT CONFIRMED: Lost sales not higher.");
+}

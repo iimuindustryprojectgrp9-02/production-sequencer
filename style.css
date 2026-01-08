@@ -140,31 +140,6 @@ nav {
     background: #2472a4;
 }
 
-.secondary-btn {
-    background: #ecf0f1;
-    color: #2c3e50;
-    border: 1px solid #dcdde1;
-    padding: 6px 12px;
-    border-radius: 4px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-}
-
-.secondary-btn:hover {
-    background: #dfe6e9;
-    border-color: #b2bec3;
-}
-
-.secondary-btn.success-btn {
-    background: #27ae60;
-    color: white;
-    border-color: #2ecc71;
-}
-
 /* Cards & Grid */
 .erp-grid {
     display: grid;
@@ -196,19 +171,11 @@ nav {
 
 .form-row {
     display: flex;
-    gap: 15px;
-    flex-wrap: wrap;
-    align-items: flex-end;
+    gap: 20px;
 }
 
 .form-group {
     flex: 1;
-    min-width: 120px;
-}
-
-.form-group.wide {
-    flex: 2;
-    min-width: 200px;
 }
 
 .form-group label {
@@ -217,21 +184,13 @@ nav {
     font-weight: 600;
     margin-bottom: 5px;
     color: #555;
-    white-space: nowrap;
 }
 
-.form-group input,
-.form-group select {
+.form-group input {
     width: 100%;
     padding: 8px;
     border: 1px solid #ccc;
     border-radius: 3px;
-    background-color: white;
-}
-
-select {
-    width: 100%;
-    max-width: 100%;
 }
 
 /* Spreadsheet Grids */
